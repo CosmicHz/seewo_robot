@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 
-from init import *
-from login import *
-from api import *
-import random
-from datetime import datetime, date, timedelta
+import json
 import time
+import random
+import requests
+from datetime import datetime, date, timedelta
+from login import acc
+from api import api
 
 
 def getpass(account: acc, schoolUid, snCode, time, classUid=""):
@@ -47,6 +48,7 @@ class yunban:
         }
 
     def getclasslist(self):
+        """获取学校下所有班级列表"""
         url = f"https://campus.seewo.com/mis-cloud-route-server/api/classmember/v1/school/{self.schoolid}/classes"
         response = requests.request("GET", url, headers=self.headers)
         return response.json()["data"]

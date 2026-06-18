@@ -87,11 +87,16 @@ def get_qrcode(cell, img, w: int, h: int):
             code += unicode_mapping[unicode_chr[char_index]]
         code += "\n"
 
-    print(code)
+    return code
 
 
-def print_qrcode(file):
+def qrcode_to_text(file):
+    """将二维码图片转换为文本字符串"""
     im = Image.open(file)
     pil_image = im.crop((15, 15, im.size[0], im.size[1]))
     width, height = pil_image.size
-    get_qrcode(get_cell(pil_image, width, height), pil_image, width, height)
+    return get_qrcode(get_cell(pil_image, width, height), pil_image, width, height)
+
+
+def print_qrcode(file):
+    print(qrcode_to_text(file))

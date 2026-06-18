@@ -1,8 +1,10 @@
 import requests
 import json
-from funcs import *
-from login import *
-from stu import *
+from funcs import pxdecode
+from login import acc
+from init import urls, proxies
+from stu import stu
+from api import api
 
 
 class msg:

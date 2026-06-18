@@ -5,20 +5,21 @@
 """
 
 import os
-import sys
 import json
+import time
+import base64
+import threading
 from flask import Flask, request, jsonify
 from functools import wraps
 
 os.chdir(os.path.dirname(__file__))
 
-from init import *
-from login import *
-from funcs import *
-from stu import *
-from msg import *
-from upload import *
-from yunban import *
+from init import qrcode_file  # noqa: E402
+from login import acc, download_qrcode, check_qrcode  # noqa: E402
+from funcs import write_file, load_chat_history, prepend_messages, update_earliest_id  # noqa: E402
+from stu import stu  # noqa: E402
+from msg import msg  # noqa: E402
+from upload import Upload  # noqa: E402
 
 app = Flask(__name__)
 
@@ -64,11 +65,18 @@ class Session:
     def init(self):
         """初始化会话"""
         if not self._initialized:
-            self.account = acc()
+            self.account = acc(auto_login=False)
+            if self.account.token_expired:
+                self._initialized = False
+                return self
             self.student = stu(self.account)
             self.stu_msg = msg(self.account, self.student)
             self._initialized = True
         return self
+
+    @property
+    def needs_login(self):
+        return self.account is not None and self.account.token_expired
 
     def refresh(self):
         """刷新会话"""
@@ -78,6 +86,22 @@ class Session:
 
 session = Session()
 
+# 登录状态
+_login_state = {
+    "in_progress": False,
+    "completed": False,
+    "success": False,
+}
+_login_lock = threading.Lock()
+
+
+def _check_session():
+    """检查会话是否有效，无效则返回需要登录的响应"""
+    session.init()
+    if session.needs_login:
+        return jsonify({"status": "error", "message": "Token已过期，需要重新登录", "need_login": True}), 401
+    return None
+
 
 def upload_file_to_cloud(file_path: str, content_type: str = "image/png") -> str:
     """上传文件到云存储"""
@@ -86,15 +110,88 @@ def upload_file_to_cloud(file_path: str, content_type: str = "image/png") -> str
     return up.downloadUrl
 
 
-# ============== API 路由 ==============
+# ============== 登录相关 API ==============
+
+
+def _poll_login(cookies):
+    """后台线程：轮询扫码状态"""
+    global _login_state
+    status = 200
+    data = None
+    max_attempts = 150  # 5分钟超时 (150 * 2秒)
+    attempt = 0
+    while (status == 200 or status == 201) and attempt < max_attempts:
+        try:
+            data = check_qrcode(cookies)["data"]
+            status = data["statusCode"]
+        except Exception:
+            break
+        attempt += 1
+        time.sleep(2)
+
+    with _login_lock:
+        if status == 202 and data:
+            write_file("tokens.json", json.dumps(data).encode())
+            _login_state["success"] = True
+            session.refresh()
+        _login_state["completed"] = True
+        _login_state["in_progress"] = False
+
+
+@app.route("/api/login/qrcode", methods=["GET"])
+@require_api_key
+def get_login_qrcode():
+    """获取登录二维码（Base64编码图片），同时启动后台轮询"""
+    with _login_lock:
+        if _login_state["in_progress"]:
+            return jsonify({"status": "ok", "message": "登录流程进行中，请轮询 /api/login/status"})
+
+    try:
+        cookies = download_qrcode()
+        with _login_lock:
+            _login_state.update({"in_progress": True, "completed": False, "success": False})
+
+        # 读取二维码图片并转为 Base64
+        with open(qrcode_file, "rb") as f:
+            qr_base64 = base64.b64encode(f.read()).decode("utf-8")
+
+        # 启动后台轮询
+        thread = threading.Thread(target=_poll_login, args=(cookies,), daemon=True)
+        thread.start()
+
+        return jsonify({"status": "ok", "qrcode": qr_base64})
+    except Exception as e:
+        with _login_lock:
+            _login_state["in_progress"] = False
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/login/status", methods=["GET"])
+@require_api_key
+def get_login_status():
+    """查询登录状态"""
+    with _login_lock:
+        if not _login_state["in_progress"] and not _login_state["completed"]:
+            return jsonify({"status": "idle", "message": "无登录流程"})
+        if _login_state["completed"]:
+            if _login_state["success"]:
+                return jsonify({"status": "ok", "message": "登录成功"})
+            else:
+                return jsonify({"status": "error", "message": "登录失败或超时"})
+    return jsonify({"status": "pending", "message": "等待扫码"})
+
+
+# ============== 业务 API ==============
 
 
 @app.route("/api/status", methods=["GET"])
 @require_api_key
 def get_status():
     """获取服务状态"""
+    err = _check_session()
+    if err:
+        return err
     try:
-        session.init()
         return jsonify(
             {
                 "status": "ok",
@@ -118,8 +215,10 @@ def get_messages():
     Query params:
         count: 获取数量，默认10
     """
+    err = _check_session()
+    if err:
+        return err
     try:
-        session.init()
         count = int(request.args.get("count", 10))
         result = session.stu_msg.get(count)
         raw_messages = result.get("result", [])
@@ -178,8 +277,10 @@ def send_message():
     JSON body:
         content: 消息内容
     """
+    err = _check_session()
+    if err:
+        return err
     try:
-        session.init()
         data = request.get_json()
         content = data.get("content", "")
 
@@ -210,8 +311,10 @@ def send_image():
     或 multipart/form-data:
         file: 图片文件
     """
+    err = _check_session()
+    if err:
+        return err
     try:
-        session.init()
 
         # 方式1: JSON body 传文件路径
         if request.is_json:
@@ -247,8 +350,10 @@ def send_audio():
         file_path: 音频文件路径
         voice_length: 音频时长(毫秒)，默认666
     """
+    err = _check_session()
+    if err:
+        return err
     try:
-        session.init()
         data = request.get_json()
         file_path = data.get("file_path")
         voice_length = data.get("voice_length", 666)
@@ -312,8 +417,10 @@ def load_earlier_messages():
     Query params:
         count: 获取数量，默认50
     """
+    err = _check_session()
+    if err:
+        return err
     try:
-        session.init()
         count = int(request.args.get("count", 50))
 
         history = load_chat_history()
@@ -406,8 +513,10 @@ def sync_all_messages():
         batch_size: 每次获取数量，默认50
         delay: 每次请求间隔(秒)，默认2.0（防风控）
     """
+    err = _check_session()
+    if err:
+        return err
     try:
-        session.init()
         data = request.get_json() or {}
         batch_size = data.get("batch_size", 50)
         delay = data.get("delay", 2.0)
@@ -502,8 +611,10 @@ def execute_command():
     JSON body:
         command: 命令内容
     """
+    err = _check_session()
+    if err:
+        return err
     try:
-        session.init()
         data = request.get_json()
         command = data.get("command", "")
 

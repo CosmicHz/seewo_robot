@@ -1,7 +1,7 @@
 import sys
-
-sys.path.append(".")
-from yunabn_token import *
+import time
+sys.path.append('.')
+from yunabn_token import test
 
 classlist = test.getclasslist()
 students = test.getstulist(classlist[35]["uid"])
@@ -14,7 +14,7 @@ for stu in students:
             event = events[int(sys.argv[1])]
         else:
             event = events[1]
-    except:
+    except (IndexError, ValueError):
         event = events[1]
     # print(sys.argv[1])
     faketime = test.randomtime(event)

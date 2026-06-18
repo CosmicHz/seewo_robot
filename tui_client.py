@@ -7,12 +7,11 @@
 import os
 import json
 import asyncio
-from datetime import datetime
+import base64
 from textual.app import App, ComposeResult
-from textual.containers import Container, Horizontal, Vertical
-from textual.widgets import Header, Footer, Static, Button, Input, ListView, ListItem
+from textual.containers import Container, Horizontal
+from textual.widgets import Header, Footer, Static, Button, Input
 from textual.reactive import reactive
-from textual.message import Message
 
 # 加载配置
 CONFIG_FILE = "config.json"
@@ -196,6 +195,10 @@ class SeewoTUI(App):
             resp = requests.get(
                 f"{API_URL}/api/status", headers={"X-API-Key": API_KEY}, timeout=5
             )
+            if resp.status_code == 401 and resp.json().get("need_login"):
+                self.status_text = "Token已过期"
+                await self.handle_login_flow()
+                return
             if resp.status_code == 200:
                 data = resp.json()
                 student = data.get("student", {})
@@ -204,6 +207,82 @@ class SeewoTUI(App):
                 self.status_text = "连接失败"
         except Exception as e:
             self.status_text = f"连接错误: {str(e)[:20]}"
+
+    async def handle_login_flow(self) -> None:
+        """处理登录流程：获取二维码 → 显示 → 轮询状态"""
+        if getattr(self, '_login_in_progress', False):
+            return
+        self._login_in_progress = True
+        try:
+            await self._do_login_flow()
+        finally:
+            self._login_in_progress = False
+
+    async def _do_login_flow(self) -> None:
+        container = self.query_one("#message-list")
+        container.remove_children()
+        container.mount(Static("Token已过期，正在获取登录二维码..."))
+
+        try:
+            import requests
+
+            # 获取二维码
+            resp = requests.get(
+                f"{API_URL}/api/login/qrcode",
+                headers={"X-API-Key": API_KEY},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                container.mount(Static(f"获取二维码失败: {resp.text}"))
+                return
+
+            data = resp.json()
+            qr_base64 = data.get("qrcode", "")
+
+            # 如果已有登录流程在进行，直接进入轮询
+            if not qr_base64 and data.get("message", "").find("进行中") >= 0:
+                container.mount(Static("登录流程已存在，等待扫码..."))
+            elif not qr_base64:
+                container.mount(Static("二维码数据为空"))
+                return
+            else:
+                # 保存二维码图片并渲染为文本
+                temp_file = "temp_qrcode.png"
+                with open(temp_file, "wb") as f:
+                    f.write(base64.b64decode(qr_base64))
+
+                from qrcode import qrcode_to_text
+                qr_text = qrcode_to_text(temp_file)
+
+                # 显示二维码
+                container.remove_children()
+                container.mount(Static("请使用微信扫描以下二维码登录："))
+                container.mount(Static(qr_text))
+
+            container.mount(Static("等待扫码中..."))
+
+            # 轮询登录状态
+            while True:
+                await asyncio.sleep(2)
+                status_resp = requests.get(
+                    f"{API_URL}/api/login/status",
+                    headers={"X-API-Key": API_KEY},
+                    timeout=5,
+                )
+                if status_resp.status_code == 200:
+                    status_data = status_resp.json()
+                    login_status = status_data.get("status")
+                    if login_status == "ok":
+                        self.status_text = "登录成功"
+                        container.mount(Static("登录成功！正在加载消息..."))
+                        await self.load_messages()
+                        return
+                    elif login_status == "error":
+                        container.mount(Static(f"登录失败: {status_data.get('message', '')}"))
+                        return
+                    # pending: 继续轮询
+        except Exception as e:
+            container.mount(Static(f"登录流程出错: {e}"))
 
     async def load_messages(self) -> None:
         """加载消息列表"""
@@ -215,6 +294,9 @@ class SeewoTUI(App):
                 headers={"X-API-Key": API_KEY},
                 timeout=5,
             )
+            if resp.status_code == 401 and resp.json().get("need_login"):
+                await self.handle_login_flow()
+                return
             if resp.status_code == 200:
                 data = resp.json()
                 self.messages = data.get("messages", [])
