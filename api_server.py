@@ -115,7 +115,6 @@ def upload_file_to_cloud(file_path: str, content_type: str = "image/png") -> str
 
 def _poll_login(cookies):
     """后台线程：轮询扫码状态"""
-    global _login_state
     status = 200
     data = None
     max_attempts = 150  # 5分钟超时 (150 * 2秒)

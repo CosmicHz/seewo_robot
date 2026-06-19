@@ -31,26 +31,48 @@ class acc:
         token_expired: 当 auto_login=False 且 Token 无效时设为 True
     """
 
-    def __init__(self, type=0, auto_login=True) -> None:
+    def __init__(self, type=0, auto_login=True, max_retries = 3) -> None:
         self.token_expired = False
-        if type == 0:
+        info = None
+
+        if type == 0:  # 检查缓存的登录凭据
             if not os.path.exists(token_file):
                 if auto_login:
-                    self.__init__(type=1, auto_login=auto_login)
+                    type = 1
                 else:
                     self.token_expired = True
-                return None
+                    return None
             else:
                 info = load_json(token_file)
-        elif type == 1:
+
+        if type == 1:  # 直接扫码登录
             if not auto_login:
                 self.token_expired = True
                 return None
             login()
             info = load_json(token_file)
-        else:
-            return None
+
         self.uid = info["userId"]
+        self._set_headers(info)
+        # 检查登录是否成功，失败则重试
+        
+        for attempt in range(max_retries):
+            if self.check_status():
+                return None
+            if not auto_login:
+                self.token_expired = True
+                return None
+            # 重新扫码登录
+            print(f"Token无效，重新登录 (第{attempt + 1}次)...")
+            login()
+            info = load_json(token_file)
+            self.uid = info["userId"]
+            self._set_headers(info)
+        self.token_expired = True
+        return None
+
+    def _set_headers(self, info):
+        """根据登录凭证设置请求头"""
         self.headers = {
             "x-info-sign": "",
             "user-agent": "Dart/2.18 (dart:io)",
@@ -72,12 +94,6 @@ class acc:
             "accept-encoding": "gzip",
             "content-type": "application/json",
         }
-        if not self.check_status():
-            if auto_login:
-                self.__init__(type=1, auto_login=auto_login)
-            else:
-                self.token_expired = True
-        return None
 
     def status(self, re):
         """解析用户状态接口的返回值，判断 Token 是否有效

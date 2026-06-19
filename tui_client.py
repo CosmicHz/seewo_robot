@@ -248,11 +248,15 @@ class SeewoTUI(App):
             else:
                 # 保存二维码图片并渲染为文本
                 temp_file = "temp_qrcode.png"
-                with open(temp_file, "wb") as f:
-                    f.write(base64.b64decode(qr_base64))
+                try:
+                    with open(temp_file, "wb") as f:
+                        f.write(base64.b64decode(qr_base64))
 
-                from qrcode import qrcode_to_text
-                qr_text = qrcode_to_text(temp_file)
+                    from qrcode import qrcode_to_text
+                    qr_text = qrcode_to_text(temp_file)
+                finally:
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
 
                 # 显示二维码
                 container.remove_children()
@@ -262,8 +266,11 @@ class SeewoTUI(App):
             container.mount(Static("等待扫码中..."))
 
             # 轮询登录状态
-            while True:
+            max_attempts = 150  # 5分钟超时 (150 * 2秒)
+            attempt = 0
+            while attempt < max_attempts:
                 await asyncio.sleep(2)
+                attempt += 1
                 status_resp = requests.get(
                     f"{API_URL}/api/login/status",
                     headers={"X-API-Key": API_KEY},
@@ -281,6 +288,7 @@ class SeewoTUI(App):
                         container.mount(Static(f"登录失败: {status_data.get('message', '')}"))
                         return
                     # pending: 继续轮询
+            container.mount(Static("登录超时，请重试"))
         except Exception as e:
             container.mount(Static(f"登录流程出错: {e}"))
 

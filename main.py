@@ -41,6 +41,9 @@ MAX_INTERVAL = config.get("max_interval", 10)
 MAX_ERRORS = config.get("max_errors", 5)
 
 account = acc()
+if account.token_expired:  # 超过最大重试次数，登录失败
+    print("登录失败，请重试")
+    exit(1)
 student = stu(account)
 stu_msg = msg(account, student)
 
@@ -106,6 +109,9 @@ def reconnect():
     global account, student, stu_msg
     logw("[INFO] 正在重新登录...")
     account = acc(type=1)
+    if account.token_expired:  # 超过最大重试次数，登录失败
+        logw("[ERROR] 重新登录失败")
+        return
     student = stu(account)
     stu_msg = msg(account, student)
     logw("[INFO] 重新登录成功")
