@@ -117,7 +117,7 @@ class msg:
         # 获取足够多的消息，然后筛选
         result = self.get(count * 2).get("result", [])
         # 筛选 ID < before_id 的消息
-        earlier = [m for m in result if m.get("id", 0) < before_id]
+        earlier = [m for m in result if int(m.get("id", 0)) < before_id]
         # 按时间正序排列（旧→新）
         return list(reversed(earlier[:count]))
 
@@ -145,7 +145,7 @@ class msg:
 
             all_messages.extend(earlier)
             # 更新current_id为获取到的最早消息ID
-            current_id = earlier[0].get("id", current_id)
+            current_id = int(earlier[0].get("id", current_id))
 
             # 如果获取的数量少于batch_size，说明已经到最早
             if len(earlier) < batch_size:

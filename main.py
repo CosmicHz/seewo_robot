@@ -196,10 +196,11 @@ def main():
                 last_msg = msg.get("content", "")
                 msg_type = msg.get("type", 1)
                 sender = msg.get("senderType", "unknown")
+                sender_name = msg.get("senderName", "")
                 msg_id = mid
 
                 # 保存到聊天记录
-                append_message(mid, last_msg, str(msg_type), sender)
+                append_message(mid, last_msg, str(msg_type), sender, sender_name)
 
             except Exception as err:
                 log = f"[ERROR] 消息获取失败(id={mid}): {err}"

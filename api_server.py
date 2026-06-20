@@ -263,6 +263,10 @@ def get_messages():
                 }
             )
 
+        print(f"[API /api/messages] count={len(messages)}")
+        if messages:
+            print(f"  首条: id={messages[0].get('id')}, sender={messages[0].get('sender')}, senderName={messages[0].get('senderName')}")
+            print(f"  末条: id={messages[-1].get('id')}, sender={messages[-1].get('sender')}, senderName={messages[-1].get('senderName')}")
         return jsonify({"status": "ok", "count": len(messages), "messages": messages})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -388,14 +392,30 @@ def get_history():
         offset = int(request.args.get("offset", 0))
 
         history = load_chat_history()
-        messages = history.get("messages", [])
+        raw_messages = history.get("messages", [])
 
         # 分页
-        total = len(messages)
-        messages = messages[offset : offset + limit]
+        total = len(raw_messages)
+        raw_messages = raw_messages[offset : offset + limit]
 
-        return jsonify(
-            {
+        # 补充 senderName（本地记录可能没有）
+        parent_uid = session.account.uid if session else ""
+        student_uid = session.student.userUid if session else ""
+        student_name = session.student.name if session else ""
+        messages = []
+        for m in raw_messages:
+            msg = dict(m)
+            sender = msg.get("sender", "unknown")
+            if not msg.get("senderName"):
+                if sender == "parent":
+                    msg["senderName"] = "家长"
+                elif sender == "student":
+                    msg["senderName"] = student_name
+                else:
+                    msg["senderName"] = "未知"
+            messages.append(msg)
+
+        result = {
                 "status": "ok",
                 "total": total,
                 "earliest_id": history.get("earliest_id", 0),
@@ -403,7 +423,11 @@ def get_history():
                 "count": len(messages),
                 "messages": messages,
             }
-        )
+        print(f"[API /api/history] total={total}, earliest_id={result['earliest_id']}, last_id={result['last_id']}, count={len(messages)}")
+        if messages:
+            print(f"  首条: id={messages[0].get('id')}, sender={messages[0].get('sender')}, senderName={messages[0].get('senderName')}, content={str(messages[0].get('content',''))[:50]}")
+            print(f"  末条: id={messages[-1].get('id')}, sender={messages[-1].get('sender')}, senderName={messages[-1].get('senderName')}, content={str(messages[-1].get('content',''))[:50]}")
+        return jsonify(result)
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -424,17 +448,27 @@ def load_earlier_messages():
 
         history = load_chat_history()
         earliest_id = history.get("earliest_id", 0)
+        existing_ids = {int(m.get("id", 0)) for m in history.get("messages", [])}
 
-        # 如果 earliest_id 为 0，说明没有记录
+        # 如果没有 earliest_id，先获取当前消息作为起点，并保存到本地
+        latest_msgs = []
         if earliest_id == 0:
-            return jsonify(
-                {"status": "error", "message": "no messages in history"}
-            ), 400
+            latest_msgs = session.stu_msg.get(count).get("result", [])
+            if not latest_msgs:
+                return jsonify(
+                    {"status": "ok", "message": "暂无消息", "has_more": False, "count": 0, "messages": []}
+                )
+            earliest_id = min(int(m.get("id", 0)) for m in latest_msgs)
 
         # 获取更早的消息
         earlier_msgs = session.stu_msg.get_earlier_messages(earliest_id, count)
 
-        if not earlier_msgs:
+        # 合并，去重
+        msgs_to_format = earlier_msgs + latest_msgs
+        msgs_to_format = [m for m in msgs_to_format if int(m.get("id", 0)) not in existing_ids]
+
+        # 如果本地没有记录且没有更早消息，把最新消息也返回
+        if not msgs_to_format:
             return jsonify(
                 {
                     "status": "ok",
@@ -450,7 +484,7 @@ def load_earlier_messages():
         student_uid = session.student.userUid
         formatted_msgs = []
 
-        for msg in earlier_msgs:
+        for msg in msgs_to_format:
             # 解析时间
             create_time = msg.get("createTime", 0)
             if create_time:
@@ -475,7 +509,7 @@ def load_earlier_messages():
                 sender_name = msg.get("senderName", "未知")
 
             formatted_msg = {
-                "id": msg.get("id", 0),
+                "id": int(msg.get("id", 0)),
                 "time": time_str,
                 "content": msg.get("content", ""),
                 "type": msg.get("type", 1),
@@ -490,6 +524,11 @@ def load_earlier_messages():
 
         # 判断是否还有更早的消息
         has_more = len(earlier_msgs) >= count
+
+        print(f"[API /api/load_earlier] earliest_id={earliest_id}, count={len(formatted_msgs)}, has_more={has_more}")
+        if formatted_msgs:
+            print(f"  首条: id={formatted_msgs[0].get('id')}, sender={formatted_msgs[0].get('sender')}, senderName={formatted_msgs[0].get('senderName')}")
+            print(f"  末条: id={formatted_msgs[-1].get('id')}, sender={formatted_msgs[-1].get('sender')}, senderName={formatted_msgs[-1].get('senderName')}")
 
         return jsonify(
             {
@@ -522,17 +561,25 @@ def sync_all_messages():
 
         history = load_chat_history()
         earliest_id = history.get("earliest_id", 0)
+        existing_ids = {int(m.get("id", 0)) for m in history.get("messages", [])}
 
-        # 如果没有记录，从最新消息开始
-        if earliest_id == 0:
-            latest_msgs = session.stu_msg.get(100).get("result", [])
-            if latest_msgs:
-                earliest_id = min(m.get("id", 0) for m in latest_msgs)
+        # 始终获取最新消息
+        latest_msgs = session.stu_msg.get(100).get("result", [])
 
-        # 获取所有历史消息
-        all_msgs = session.stu_msg.get_all_messages_until_earliest(
-            earliest_id, batch_size, delay
-        )
+        # 确定最早的已知消息ID
+        if earliest_id == 0 and latest_msgs:
+            earliest_id = min(int(m.get("id", 0)) for m in latest_msgs)
+
+        # 获取所有历史消息（比 earliest_id 更早的）
+        earlier_msgs = []
+        if earliest_id > 0:
+            earlier_msgs = session.stu_msg.get_all_messages_until_earliest(
+                earliest_id, batch_size, delay
+            )
+
+        # 合并：更早的消息 + 最新消息，去重（排除本地已有的）
+        all_msgs = earlier_msgs + latest_msgs
+        all_msgs = [m for m in all_msgs if int(m.get("id", 0)) not in existing_ids]
 
         # 格式化并保存
         parent_uid = session.account.uid
@@ -562,7 +609,7 @@ def sync_all_messages():
                 sender_name = msg.get("senderName", "未知")
 
             formatted_msg = {
-                "id": msg.get("id", 0),
+                "id": int(msg.get("id", 0)),
                 "time": time_str,
                 "content": msg.get("content", ""),
                 "type": msg.get("type", 1),
@@ -579,12 +626,14 @@ def sync_all_messages():
         if formatted_msgs:
             update_earliest_id(min(m["id"] for m in formatted_msgs))
 
+        total_count = len(load_chat_history().get("messages", []))
+        print(f"[API /api/sync_all] synced_count={len(formatted_msgs)}, total_count={total_count}")
         return jsonify(
             {
                 "status": "ok",
                 "message": "全量同步完成",
                 "synced_count": len(formatted_msgs),
-                "total_count": len(load_chat_history().get("messages", [])),
+                "total_count": total_count,
             }
         )
     except Exception as e:
