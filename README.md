@@ -160,4 +160,4 @@ seewo_robot/
 ```
 
 ## API相关说明
-详见[Seewo-API](https://github.com/cmy2008/api-collet/blob/main/seewo/readme.md)
+详见[Seewo-API](https://github.com/cuitepiglin/seewo-api)
