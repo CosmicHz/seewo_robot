@@ -79,7 +79,7 @@ def save_chat_history(history: dict) -> None:
 
 
 def append_message(
-    msg_id: int, content: str, msg_type: str = "text", sender: str = ""
+    msg_id: int, content: str, msg_type: str = "text", sender: str = "", sender_name: str = ""
 ) -> None:
     """追加一条消息到聊天记录
 
@@ -94,6 +94,7 @@ def append_message(
         "content": content,
         "type": msg_type,
         "sender": sender,
+        "senderName": sender_name,
     }
     history["messages"].append(new_msg)
 

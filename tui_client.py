@@ -7,12 +7,11 @@
 import os
 import json
 import asyncio
-from datetime import datetime
+import base64
 from textual.app import App, ComposeResult
-from textual.containers import Container, Horizontal, Vertical
-from textual.widgets import Header, Footer, Static, Button, Input, ListView, ListItem
+from textual.containers import Container, Horizontal
+from textual.widgets import Header, Footer, Static, Button, Input
 from textual.reactive import reactive
-from textual.message import Message
 
 # 加载配置
 CONFIG_FILE = "config.json"
@@ -41,7 +40,9 @@ class MessageWidget(Static):
     def compose(self) -> ComposeResult:
         time_str = self.msg_data.get("time", "")
         content = self.msg_data.get("content", "")
-        sender_name = self.msg_data.get("senderName", "未知")
+        sender_name = self.msg_data.get("senderName", "")
+        if not sender_name:
+            sender_name = {"parent": "家长", "student": "学生"}.get(self.sender, "未知")
         msg_type = self.msg_data.get("type", 1)
 
         # 格式化显示
@@ -196,6 +197,10 @@ class SeewoTUI(App):
             resp = requests.get(
                 f"{API_URL}/api/status", headers={"X-API-Key": API_KEY}, timeout=5
             )
+            if resp.status_code == 401 and resp.json().get("need_login"):
+                self.status_text = "Token已过期"
+                await self.handle_login_flow()
+                return
             if resp.status_code == 200:
                 data = resp.json()
                 student = data.get("student", {})
@@ -205,16 +210,107 @@ class SeewoTUI(App):
         except Exception as e:
             self.status_text = f"连接错误: {str(e)[:20]}"
 
+    async def handle_login_flow(self) -> None:
+        """处理登录流程：获取二维码 → 显示 → 轮询状态"""
+        if getattr(self, '_login_in_progress', False):
+            return
+        self._login_in_progress = True
+        try:
+            await self._do_login_flow()
+        finally:
+            self._login_in_progress = False
+
+    async def _do_login_flow(self) -> None:
+        container = self.query_one("#message-list")
+        container.remove_children()
+        container.mount(Static("Token已过期，正在获取登录二维码..."))
+
+        try:
+            import requests
+
+            # 获取二维码
+            resp = requests.get(
+                f"{API_URL}/api/login/qrcode",
+                headers={"X-API-Key": API_KEY},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                container.mount(Static(f"获取二维码失败: {resp.text}"))
+                return
+
+            data = resp.json()
+            qr_base64 = data.get("qrcode", "")
+
+            # 如果已有登录流程在进行，直接进入轮询
+            if not qr_base64 and data.get("message", "").find("进行中") >= 0:
+                container.mount(Static("登录流程已存在，等待扫码..."))
+            elif not qr_base64:
+                container.mount(Static("二维码数据为空"))
+                return
+            else:
+                # 保存二维码图片并渲染为文本
+                temp_file = "temp_qrcode.png"
+                try:
+                    with open(temp_file, "wb") as f:
+                        f.write(base64.b64decode(qr_base64))
+
+                    from qrcode import qrcode_to_text
+                    qr_text = qrcode_to_text(temp_file)
+                finally:
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
+
+                # 显示二维码
+                container.remove_children()
+                container.mount(Static("请使用微信扫描以下二维码登录："))
+                container.mount(Static(qr_text))
+
+            container.mount(Static("等待扫码中..."))
+
+            # 轮询登录状态
+            max_attempts = 150  # 5分钟超时 (150 * 2秒)
+            attempt = 0
+            while attempt < max_attempts:
+                await asyncio.sleep(2)
+                attempt += 1
+                status_resp = requests.get(
+                    f"{API_URL}/api/login/status",
+                    headers={"X-API-Key": API_KEY},
+                    timeout=5,
+                )
+                if status_resp.status_code == 200:
+                    status_data = status_resp.json()
+                    login_status = status_data.get("status")
+                    if login_status == "ok":
+                        self.status_text = "登录成功"
+                        container.mount(Static("登录成功！正在加载消息..."))
+                        await self.load_messages()
+                        return
+                    elif login_status == "error":
+                        container.mount(Static(f"登录失败: {status_data.get('message', '')}"))
+                        return
+                    # pending: 继续轮询
+            container.mount(Static("登录超时，请重试"))
+        except Exception as e:
+            container.mount(Static(f"登录流程出错: {e}"))
+
     async def load_messages(self) -> None:
         """加载消息列表"""
         try:
             import requests
 
-            resp = requests.get(
-                f"{API_URL}/api/messages?count=20",
-                headers={"X-API-Key": API_KEY},
-                timeout=5,
+            loop = asyncio.get_event_loop()
+            resp = await loop.run_in_executor(
+                None,
+                lambda: requests.get(
+                    f"{API_URL}/api/messages?count=20",
+                    headers={"X-API-Key": API_KEY},
+                    timeout=5,
+                ),
             )
+            if resp.status_code == 401 and resp.json().get("need_login"):
+                await self.handle_login_flow()
+                return
             if resp.status_code == 200:
                 data = resp.json()
                 self.messages = data.get("messages", [])
@@ -227,17 +323,22 @@ class SeewoTUI(App):
         try:
             import requests
 
-            resp = requests.get(
-                f"{API_URL}/api/history?limit=100",
-                headers={"X-API-Key": API_KEY},
-                timeout=5,
+            loop = asyncio.get_event_loop()
+            resp = await loop.run_in_executor(
+                None,
+                lambda: requests.get(
+                    f"{API_URL}/api/history?limit=100",
+                    headers={"X-API-Key": API_KEY},
+                    timeout=5,
+                ),
             )
             if resp.status_code == 200:
                 data = resp.json()
                 self.messages = data.get("messages", [])
+                earliest = data.get("earliest_id", 0)
                 self.has_more = (
-                    data.get("earliest_id", 0) > 0
-                )  # 如果 earliest_id > 0，可能还有更早的
+                    int(earliest) > 0 if earliest else False
+                )
                 self.render_messages()
         except Exception as e:
             self.query_one("#message-list").mount(Static(f"加载失败: {e}"))
@@ -251,10 +352,14 @@ class SeewoTUI(App):
         try:
             import requests
 
-            resp = requests.get(
-                f"{API_URL}/api/load_earlier?count=50",
-                headers={"X-API-Key": API_KEY},
-                timeout=10,
+            loop = asyncio.get_event_loop()
+            resp = await loop.run_in_executor(
+                None,
+                lambda: requests.get(
+                    f"{API_URL}/api/load_earlier?count=50",
+                    headers={"X-API-Key": API_KEY},
+                    timeout=10,
+                ),
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -274,29 +379,31 @@ class SeewoTUI(App):
 
     async def sync_all_messages(self) -> None:
         """全量同步所有历史消息"""
-        self.query_one("#message-list").mount(Static("正在全量同步，请稍候..."))
+        self.status_text = "正在全量同步，请稍候..."
 
         try:
             import requests
 
-            resp = requests.post(
-                f"{API_URL}/api/sync_all",
-                headers={"X-API-Key": API_KEY},
-                json={"batch_size": 50, "delay": 2.0},
-                timeout=300,  # 5分钟超时
+            loop = asyncio.get_event_loop()
+            resp = await loop.run_in_executor(
+                None,
+                lambda: requests.post(
+                    f"{API_URL}/api/sync_all",
+                    headers={"X-API-Key": API_KEY},
+                    json={"batch_size": 50, "delay": 2.0},
+                    timeout=300,
+                ),
             )
             if resp.status_code == 200:
                 data = resp.json()
                 synced_count = data.get("synced_count", 0)
                 total_count = data.get("total_count", 0)
-                self.query_one("#message-list").mount(
-                    Static(f"同步完成: 新增 {synced_count} 条，共 {total_count} 条")
-                )
-                await self.load_history()  # 重新加载历史
+                self.status_text = f"同步完成: 新增 {synced_count} 条，共 {total_count} 条"
+                await self.load_history()
             else:
-                self.query_one("#message-list").mount(Static(f"同步失败: {resp.text}"))
+                self.status_text = f"同步失败: {resp.text}"
         except Exception as e:
-            self.query_one("#message-list").mount(Static(f"同步错误: {e}"))
+            self.status_text = f"同步错误: {e}"
 
     def render_messages(self, scroll_to_top: bool = False) -> None:
         """渲染消息列表"""
@@ -309,7 +416,10 @@ class SeewoTUI(App):
 
         # API返回顺序已是旧→新，直接按顺序显示（旧消息在上面）
         for msg in self.messages:
-            container.mount(MessageWidget(msg))
+            try:
+                container.mount(MessageWidget(msg))
+            except Exception as e:
+                container.mount(Static(f"[渲染错误] {e}: {msg}"))
 
         # 滚动到指定位置
         if scroll_to_top:

@@ -61,6 +61,8 @@ python tui_client.py
 | `L` | 加载更早消息 |
 | `Y` | 全量同步 |
 | `S` | 发送消息 |
+| `I` | 发送图片 |
+| `A` | 发送音频 |
 | `Q` | 退出 |
 
 ### 方式3：命令行客户端
@@ -109,6 +111,9 @@ python send_msg.py "今天放学早点回来"
 | `/api/load_earlier` | GET | 加载更早的消息 |
 | `/api/sync_all` | POST | 全量同步所有历史 |
 | `/api/refresh` | POST | 刷新会话 |
+| `/api/login/qrcode` | GET | 获取登录二维码 |
+| `/api/login/status` | GET | 查询登录状态 |
+| `/api/execute` | POST | 执行命令 |
 
 所有接口需要 `X-API-Key` header 认证。
 
@@ -143,9 +148,13 @@ seewo_robot/
 ├── msg.py           # 消息收发模块
 ├── stu.py           # 学生信息管理
 ├── upload.py        # 文件上传模块
+├── upload_file.py   # 文件上传独立脚本
 ├── funcs.py         # 工具函数
 ├── init.py          # 初始化配置
 ├── yunban.py        # 云班功能扩展
+├── api.py           # m-campus API 调用网关
+├── auto_attend.py   # 自动签到脚本
+├── qrcode.py        # 二维码解析工具
 ├── config.json      # 配置文件
 └── README.md        # 说明文档
 ```

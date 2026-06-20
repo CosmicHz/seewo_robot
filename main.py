@@ -1,4 +1,10 @@
 # -*- coding: utf-8 -*-
+"""
+希沃班牌机器人主程序
+
+轮询监听消息，处理 / 命令，自适应轮询间隔，断线自动重连。
+支持命令: /getpass, /发送音乐, 以及自定义 shell 命令。
+"""
 
 # TODO: 多学生选择
 import os
@@ -8,13 +14,12 @@ import json
 os.chdir(os.path.dirname(__file__))
 print("当前路径：" + os.getcwd())
 
-from init import *
-from login import *
-from funcs import *
-from stu import *
-from msg import *
-from upload import *
-from yunban import *
+from login import acc  # noqa: E402
+from funcs import load_chat_history, append_message, datenow, logw  # noqa: E402
+from stu import stu  # noqa: E402
+from msg import msg  # noqa: E402
+from upload import Upload  # noqa: E402
+from yunban import getpass  # noqa: E402
 
 # 加载配置
 CONFIG_FILE = "config.json"
@@ -29,23 +34,29 @@ def load_config() -> dict:
 
 
 config = load_config()
+# 轮询配置：批量大小、基础间隔、最大间隔、连续错误上限
 POLL_BATCH_SIZE = config.get("poll_batch_size", 50)
 BASE_INTERVAL = config.get("base_interval", 1)
 MAX_INTERVAL = config.get("max_interval", 10)
 MAX_ERRORS = config.get("max_errors", 5)
 
 account = acc()
+if account.token_expired:  # 超过最大重试次数，登录失败
+    print("登录失败，请重试")
+    exit(1)
 student = stu(account)
 stu_msg = msg(account, student)
 
 
 def upload_file(account: acc, file, type="image/png"):
+    """上传文件到云存储并返回下载 URL"""
     up = Upload(account)
     up.upload(file=file, type=type)
     return up.downloadUrl
 
 
 def send_msg(send: str):
+    """发送文本消息（超过199字自动截断）"""
     try:
         # TODO: 超时处理
         print(send)
@@ -80,6 +91,7 @@ def handle_command(command_text: str):
             else:
                 send_msg("[ERROR] 用法: /getpass <schoolUid> <snCode>")
         case "发送音乐":
+            # 发送 music/ 目录下所有音频文件
             if not os.path.exists("music"):
                 os.mkdir("music")
             filelist = os.listdir("music")
@@ -88,6 +100,7 @@ def handle_command(command_text: str):
             for file in filelist:
                 send_audio("music/" + file)
         case _:
+            # 其他命令直接执行 shell
             send_msg(os.popen(command_text).read())
 
 
@@ -96,6 +109,9 @@ def reconnect():
     global account, student, stu_msg
     logw("[INFO] 正在重新登录...")
     account = acc(type=1)
+    if account.token_expired:  # 超过最大重试次数，登录失败
+        logw("[ERROR] 重新登录失败")
+        return
     student = stu(account)
     stu_msg = msg(account, student)
     logw("[INFO] 重新登录成功")
@@ -180,10 +196,11 @@ def main():
                 last_msg = msg.get("content", "")
                 msg_type = msg.get("type", 1)
                 sender = msg.get("senderType", "unknown")
+                sender_name = msg.get("senderName", "")
                 msg_id = mid
 
                 # 保存到聊天记录
-                append_message(mid, last_msg, str(msg_type), sender)
+                append_message(mid, last_msg, str(msg_type), sender, sender_name)
 
             except Exception as err:
                 log = f"[ERROR] 消息获取失败(id={mid}): {err}"

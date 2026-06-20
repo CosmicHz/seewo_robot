@@ -6,7 +6,6 @@
 import os
 import json
 import requests
-from typing import Optional
 
 # 加载配置
 CONFIG_FILE = "config.json"

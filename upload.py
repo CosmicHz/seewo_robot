@@ -1,10 +1,16 @@
 # -*- coding: utf-8 -*-
 
-from funcs import *
-from login import *
-from api import *
-import random, string
+import os
+import json
+import time
+import random
+import string
+import requests
 from requests_toolbelt import MultipartEncoder
+from init import uploads_file
+from funcs import read_file, write_file
+from login import acc
+from api import api
 
 
 class Upload:
@@ -123,6 +129,6 @@ class Upload:
                 print("上传成功: " + self.downloadUrl)
             else:
                 print("上传失败: " + response.text)
-        except:
+        except Exception:
             response = None
         return response

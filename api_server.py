@@ -5,20 +5,21 @@
 """
 
 import os
-import sys
 import json
+import time
+import base64
+import threading
 from flask import Flask, request, jsonify
 from functools import wraps
 
 os.chdir(os.path.dirname(__file__))
 
-from init import *
-from login import *
-from funcs import *
-from stu import *
-from msg import *
-from upload import *
-from yunban import *
+from init import qrcode_file  # noqa: E402
+from login import acc, download_qrcode, check_qrcode  # noqa: E402
+from funcs import write_file, load_chat_history, prepend_messages, update_earliest_id  # noqa: E402
+from stu import stu  # noqa: E402
+from msg import msg  # noqa: E402
+from upload import Upload  # noqa: E402
 
 app = Flask(__name__)
 
@@ -64,11 +65,18 @@ class Session:
     def init(self):
         """初始化会话"""
         if not self._initialized:
-            self.account = acc()
+            self.account = acc(auto_login=False)
+            if self.account.token_expired:
+                self._initialized = False
+                return self
             self.student = stu(self.account)
             self.stu_msg = msg(self.account, self.student)
             self._initialized = True
         return self
+
+    @property
+    def needs_login(self):
+        return self.account is not None and self.account.token_expired
 
     def refresh(self):
         """刷新会话"""
@@ -78,6 +86,22 @@ class Session:
 
 session = Session()
 
+# 登录状态
+_login_state = {
+    "in_progress": False,
+    "completed": False,
+    "success": False,
+}
+_login_lock = threading.Lock()
+
+
+def _check_session():
+    """检查会话是否有效，无效则返回需要登录的响应"""
+    session.init()
+    if session.needs_login:
+        return jsonify({"status": "error", "message": "Token已过期，需要重新登录", "need_login": True}), 401
+    return None
+
 
 def upload_file_to_cloud(file_path: str, content_type: str = "image/png") -> str:
     """上传文件到云存储"""
@@ -86,15 +110,87 @@ def upload_file_to_cloud(file_path: str, content_type: str = "image/png") -> str
     return up.downloadUrl
 
 
-# ============== API 路由 ==============
+# ============== 登录相关 API ==============
+
+
+def _poll_login(cookies):
+    """后台线程：轮询扫码状态"""
+    status = 200
+    data = None
+    max_attempts = 150  # 5分钟超时 (150 * 2秒)
+    attempt = 0
+    while (status == 200 or status == 201) and attempt < max_attempts:
+        try:
+            data = check_qrcode(cookies)["data"]
+            status = data["statusCode"]
+        except Exception:
+            break
+        attempt += 1
+        time.sleep(2)
+
+    with _login_lock:
+        if status == 202 and data:
+            write_file("tokens.json", json.dumps(data).encode())
+            _login_state["success"] = True
+            session.refresh()
+        _login_state["completed"] = True
+        _login_state["in_progress"] = False
+
+
+@app.route("/api/login/qrcode", methods=["GET"])
+@require_api_key
+def get_login_qrcode():
+    """获取登录二维码（Base64编码图片），同时启动后台轮询"""
+    with _login_lock:
+        if _login_state["in_progress"]:
+            return jsonify({"status": "ok", "message": "登录流程进行中，请轮询 /api/login/status"})
+
+    try:
+        cookies = download_qrcode()
+        with _login_lock:
+            _login_state.update({"in_progress": True, "completed": False, "success": False})
+
+        # 读取二维码图片并转为 Base64
+        with open(qrcode_file, "rb") as f:
+            qr_base64 = base64.b64encode(f.read()).decode("utf-8")
+
+        # 启动后台轮询
+        thread = threading.Thread(target=_poll_login, args=(cookies,), daemon=True)
+        thread.start()
+
+        return jsonify({"status": "ok", "qrcode": qr_base64})
+    except Exception as e:
+        with _login_lock:
+            _login_state["in_progress"] = False
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/login/status", methods=["GET"])
+@require_api_key
+def get_login_status():
+    """查询登录状态"""
+    with _login_lock:
+        if not _login_state["in_progress"] and not _login_state["completed"]:
+            return jsonify({"status": "idle", "message": "无登录流程"})
+        if _login_state["completed"]:
+            if _login_state["success"]:
+                return jsonify({"status": "ok", "message": "登录成功"})
+            else:
+                return jsonify({"status": "error", "message": "登录失败或超时"})
+    return jsonify({"status": "pending", "message": "等待扫码"})
+
+
+# ============== 业务 API ==============
 
 
 @app.route("/api/status", methods=["GET"])
 @require_api_key
 def get_status():
     """获取服务状态"""
+    err = _check_session()
+    if err:
+        return err
     try:
-        session.init()
         return jsonify(
             {
                 "status": "ok",
@@ -118,8 +214,10 @@ def get_messages():
     Query params:
         count: 获取数量，默认10
     """
+    err = _check_session()
+    if err:
+        return err
     try:
-        session.init()
         count = int(request.args.get("count", 10))
         result = session.stu_msg.get(count)
         raw_messages = result.get("result", [])
@@ -165,6 +263,10 @@ def get_messages():
                 }
             )
 
+        print(f"[API /api/messages] count={len(messages)}")
+        if messages:
+            print(f"  首条: id={messages[0].get('id')}, sender={messages[0].get('sender')}, senderName={messages[0].get('senderName')}")
+            print(f"  末条: id={messages[-1].get('id')}, sender={messages[-1].get('sender')}, senderName={messages[-1].get('senderName')}")
         return jsonify({"status": "ok", "count": len(messages), "messages": messages})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -178,8 +280,10 @@ def send_message():
     JSON body:
         content: 消息内容
     """
+    err = _check_session()
+    if err:
+        return err
     try:
-        session.init()
         data = request.get_json()
         content = data.get("content", "")
 
@@ -210,8 +314,10 @@ def send_image():
     或 multipart/form-data:
         file: 图片文件
     """
+    err = _check_session()
+    if err:
+        return err
     try:
-        session.init()
 
         # 方式1: JSON body 传文件路径
         if request.is_json:
@@ -247,8 +353,10 @@ def send_audio():
         file_path: 音频文件路径
         voice_length: 音频时长(毫秒)，默认666
     """
+    err = _check_session()
+    if err:
+        return err
     try:
-        session.init()
         data = request.get_json()
         file_path = data.get("file_path")
         voice_length = data.get("voice_length", 666)
@@ -284,14 +392,30 @@ def get_history():
         offset = int(request.args.get("offset", 0))
 
         history = load_chat_history()
-        messages = history.get("messages", [])
+        raw_messages = history.get("messages", [])
 
         # 分页
-        total = len(messages)
-        messages = messages[offset : offset + limit]
+        total = len(raw_messages)
+        raw_messages = raw_messages[offset : offset + limit]
 
-        return jsonify(
-            {
+        # 补充 senderName（本地记录可能没有）
+        parent_uid = session.account.uid if session else ""
+        student_uid = session.student.userUid if session else ""
+        student_name = session.student.name if session else ""
+        messages = []
+        for m in raw_messages:
+            msg = dict(m)
+            sender = msg.get("sender", "unknown")
+            if not msg.get("senderName"):
+                if sender == "parent":
+                    msg["senderName"] = "家长"
+                elif sender == "student":
+                    msg["senderName"] = student_name
+                else:
+                    msg["senderName"] = "未知"
+            messages.append(msg)
+
+        result = {
                 "status": "ok",
                 "total": total,
                 "earliest_id": history.get("earliest_id", 0),
@@ -299,7 +423,11 @@ def get_history():
                 "count": len(messages),
                 "messages": messages,
             }
-        )
+        print(f"[API /api/history] total={total}, earliest_id={result['earliest_id']}, last_id={result['last_id']}, count={len(messages)}")
+        if messages:
+            print(f"  首条: id={messages[0].get('id')}, sender={messages[0].get('sender')}, senderName={messages[0].get('senderName')}, content={str(messages[0].get('content',''))[:50]}")
+            print(f"  末条: id={messages[-1].get('id')}, sender={messages[-1].get('sender')}, senderName={messages[-1].get('senderName')}, content={str(messages[-1].get('content',''))[:50]}")
+        return jsonify(result)
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -312,23 +440,35 @@ def load_earlier_messages():
     Query params:
         count: 获取数量，默认50
     """
+    err = _check_session()
+    if err:
+        return err
     try:
-        session.init()
         count = int(request.args.get("count", 50))
 
         history = load_chat_history()
         earliest_id = history.get("earliest_id", 0)
+        existing_ids = {int(m.get("id", 0)) for m in history.get("messages", [])}
 
-        # 如果 earliest_id 为 0，说明没有记录
+        # 如果没有 earliest_id，先获取当前消息作为起点，并保存到本地
+        latest_msgs = []
         if earliest_id == 0:
-            return jsonify(
-                {"status": "error", "message": "no messages in history"}
-            ), 400
+            latest_msgs = session.stu_msg.get(count).get("result", [])
+            if not latest_msgs:
+                return jsonify(
+                    {"status": "ok", "message": "暂无消息", "has_more": False, "count": 0, "messages": []}
+                )
+            earliest_id = min(int(m.get("id", 0)) for m in latest_msgs)
 
         # 获取更早的消息
         earlier_msgs = session.stu_msg.get_earlier_messages(earliest_id, count)
 
-        if not earlier_msgs:
+        # 合并，去重
+        msgs_to_format = earlier_msgs + latest_msgs
+        msgs_to_format = [m for m in msgs_to_format if int(m.get("id", 0)) not in existing_ids]
+
+        # 如果本地没有记录且没有更早消息，把最新消息也返回
+        if not msgs_to_format:
             return jsonify(
                 {
                     "status": "ok",
@@ -344,7 +484,7 @@ def load_earlier_messages():
         student_uid = session.student.userUid
         formatted_msgs = []
 
-        for msg in earlier_msgs:
+        for msg in msgs_to_format:
             # 解析时间
             create_time = msg.get("createTime", 0)
             if create_time:
@@ -369,7 +509,7 @@ def load_earlier_messages():
                 sender_name = msg.get("senderName", "未知")
 
             formatted_msg = {
-                "id": msg.get("id", 0),
+                "id": int(msg.get("id", 0)),
                 "time": time_str,
                 "content": msg.get("content", ""),
                 "type": msg.get("type", 1),
@@ -384,6 +524,11 @@ def load_earlier_messages():
 
         # 判断是否还有更早的消息
         has_more = len(earlier_msgs) >= count
+
+        print(f"[API /api/load_earlier] earliest_id={earliest_id}, count={len(formatted_msgs)}, has_more={has_more}")
+        if formatted_msgs:
+            print(f"  首条: id={formatted_msgs[0].get('id')}, sender={formatted_msgs[0].get('sender')}, senderName={formatted_msgs[0].get('senderName')}")
+            print(f"  末条: id={formatted_msgs[-1].get('id')}, sender={formatted_msgs[-1].get('sender')}, senderName={formatted_msgs[-1].get('senderName')}")
 
         return jsonify(
             {
@@ -406,25 +551,35 @@ def sync_all_messages():
         batch_size: 每次获取数量，默认50
         delay: 每次请求间隔(秒)，默认2.0（防风控）
     """
+    err = _check_session()
+    if err:
+        return err
     try:
-        session.init()
         data = request.get_json() or {}
         batch_size = data.get("batch_size", 50)
         delay = data.get("delay", 2.0)
 
         history = load_chat_history()
         earliest_id = history.get("earliest_id", 0)
+        existing_ids = {int(m.get("id", 0)) for m in history.get("messages", [])}
 
-        # 如果没有记录，从最新消息开始
-        if earliest_id == 0:
-            latest_msgs = session.stu_msg.get(100).get("result", [])
-            if latest_msgs:
-                earliest_id = min(m.get("id", 0) for m in latest_msgs)
+        # 始终获取最新消息
+        latest_msgs = session.stu_msg.get(100).get("result", [])
 
-        # 获取所有历史消息
-        all_msgs = session.stu_msg.get_all_messages_until_earliest(
-            earliest_id, batch_size, delay
-        )
+        # 确定最早的已知消息ID
+        if earliest_id == 0 and latest_msgs:
+            earliest_id = min(int(m.get("id", 0)) for m in latest_msgs)
+
+        # 获取所有历史消息（比 earliest_id 更早的）
+        earlier_msgs = []
+        if earliest_id > 0:
+            earlier_msgs = session.stu_msg.get_all_messages_until_earliest(
+                earliest_id, batch_size, delay
+            )
+
+        # 合并：更早的消息 + 最新消息，去重（排除本地已有的）
+        all_msgs = earlier_msgs + latest_msgs
+        all_msgs = [m for m in all_msgs if int(m.get("id", 0)) not in existing_ids]
 
         # 格式化并保存
         parent_uid = session.account.uid
@@ -454,7 +609,7 @@ def sync_all_messages():
                 sender_name = msg.get("senderName", "未知")
 
             formatted_msg = {
-                "id": msg.get("id", 0),
+                "id": int(msg.get("id", 0)),
                 "time": time_str,
                 "content": msg.get("content", ""),
                 "type": msg.get("type", 1),
@@ -471,12 +626,14 @@ def sync_all_messages():
         if formatted_msgs:
             update_earliest_id(min(m["id"] for m in formatted_msgs))
 
+        total_count = len(load_chat_history().get("messages", []))
+        print(f"[API /api/sync_all] synced_count={len(formatted_msgs)}, total_count={total_count}")
         return jsonify(
             {
                 "status": "ok",
                 "message": "全量同步完成",
                 "synced_count": len(formatted_msgs),
-                "total_count": len(load_chat_history().get("messages", [])),
+                "total_count": total_count,
             }
         )
     except Exception as e:
@@ -502,8 +659,10 @@ def execute_command():
     JSON body:
         command: 命令内容
     """
+    err = _check_session()
+    if err:
+        return err
     try:
-        session.init()
         data = request.get_json()
         command = data.get("command", "")
 
