@@ -1,12 +1,17 @@
 # Seewo 班牌机器人
+>
 > [!WARNING]
-> ## 该项目正在开发中，请勿用于学习环境，否则可能会带来严重后果！
+>
+> ## 该项目正在开发中，请勿用于学习环境，否则可能会带来严重后果
 
 ## 介绍
+
 Seewo 班牌机器人是一个用于「希沃云班」微信小程序或「希沃魔方」APP的聊天机器人
 
 ## 功能
+
 该程序利用「希沃统一服务平台」的相关API实现「希沃云班」的「亲情留言」以及相关功能，已实现的有：
+
 - 微信二维码登录
 - 留言接收与实时显示
 - 留言发送（文本/图片/音频）
@@ -16,6 +21,7 @@ Seewo 班牌机器人是一个用于「希沃云班」微信小程序或「希�
 - 聊天记录持久化
 - 按需加载历史消息
 - 全量同步功能（防风控）
+- Mock 服务器（本地调试）
 
 ## 安装依赖
 
@@ -31,6 +37,17 @@ pip install textual
 
 # 或一键安装全部依赖
 pip install -r requirements.txt
+```
+
+## 快速开始
+
+```bash
+# 1. 复制配置文件
+cp config.json.example config.json
+
+# 2. 编辑配置（设置 API Key 等）
+# 3. 运行程序
+python api_server.py
 ```
 
 ## 使用方式
@@ -54,8 +71,9 @@ python tui_client.py
 ```
 
 **TUI 快捷键：**
+
 | 键 | 功能 |
-|----|------|
+| ---- | ------ |
 | `R` | 刷新消息 |
 | `H` | 查看本地历史 |
 | `L` | 加载更早消息 |
@@ -82,9 +100,54 @@ python client.py history         # 查看本地历史
 python send_msg.py "今天放学早点回来"
 ```
 
+### 方式5：Mock 服务器（本地调试）
+
+无需连接真实希沃服务器，使用本地模拟服务器进行开发和调试。Mock 服务器会自动适配真实 UID（如 tokens.json 中的家长 UID），无需手动配置。
+
+```bash
+# 1. 在 config.json 中启用 mock 模式
+#    "use_mock": true,
+#    "mock_port": 你的端口
+
+# 2. 启动 mock 服务器
+python mock_server.py
+
+# 3. 正常运行程序（请求会自动发到本地 mock 服务器）
+python main.py
+```
+
+**Mock 管理接口：**
+
+| 接口 | 方法 | 功能 |
+| ------ | ------ | ------ |
+| `/mock/add_message` | POST | 模拟学生发送消息 |
+| `/mock/clear_messages` | POST | 清空所有消息 |
+| `/mock/data` | GET | 查看所有数据 |
+| `/mock/reset` | POST | 重置为默认数据（含预设消息） |
+| `/mock/save` | POST | 持久化数据到文件 |
+| `/mock/load` | POST | 从文件加载数据 |
+
+模拟学生发消息示例：
+
+```bash
+# Linux/macOS
+curl -X POST http://localhost:9000/mock/add_message \
+  -H "Content-Type: application/json" \
+  -d '{"content": "我在学校很好！"}'
+
+# Windows PowerShell
+Invoke-WebRequest -Uri "http://localhost:9000/mock/add_message" -Method POST -ContentType "application/json" -Body '{"content": "我在学校很好！"}'
+```
+
+清空消息：
+
+```powershell
+Invoke-WebRequest -Uri "http://localhost:9000/mock/clear_messages" -Method POST
+```
+
 ## 配置文件
 
-`config.json` 配置说明：
+复制 `config.json.example` 为 `config.json`，按需修改：
 
 ```json
 {
@@ -94,14 +157,16 @@ python send_msg.py "今天放学早点回来"
   "poll_batch_size": 50,           // 每次轮询消息数量
   "base_interval": 1,              // 基础轮询间隔(秒)
   "max_interval": 10,              // 最大轮询间隔(秒)
-  "max_errors": 5                  // 连续错误上限
+  "max_errors": 5,                 // 连续错误上限
+  "use_mock": false,               // 启用 Mock 服务器
+  "mock_port": 9000                // Mock 服务器端口
 }
 ```
 
 ## API 接口
 
 | 接口 | 方法 | 功能 |
-|------|------|------|
+| ------ | ------ | ------ |
 | `/api/status` | GET | 获取服务状态 |
 | `/api/messages` | GET | 获取消息列表 |
 | `/api/send` | POST | 发送文本消息 |
@@ -120,10 +185,12 @@ python send_msg.py "今天放学早点回来"
 ## 数据文件
 
 | 文件 | 说明 |
-|------|------|
+| ------ | ------ |
+| `config.json` | 配置文件 |
 | `tokens.json` | 登录 Token 存储 |
 | `chat_history.json` | 聊天记录持久化 |
-| `config.json` | 配置文件 |
+| `uploads.json` | 上传文件记录 |
+| `mock_data.json` | Mock 服务器持久化数据 |
 | `logs/*.log` | 按日期记录日志 |
 
 ## 命令示例
@@ -139,26 +206,28 @@ python send_msg.py "今天放学早点回来"
 
 ```
 seewo_robot/
-├── main.py          # 主程序（消息监听）
-├── api_server.py    # REST API 服务端
-├── tui_client.py    # TUI 终端客户端
-├── client.py        # Python SDK + 命令行客户端
-├── send_msg.py      # 快速发送消息脚本
-├── login.py         # 登录模块
-├── msg.py           # 消息收发模块
-├── stu.py           # 学生信息管理
-├── upload.py        # 文件上传模块
-├── upload_file.py   # 文件上传独立脚本
-├── funcs.py         # 工具函数
-├── init.py          # 初始化配置
-├── yunban.py        # 云班功能扩展
-├── api.py           # m-campus API 调用网关
-├── auto_attend.py   # 自动签到脚本
-├── qrcode.py        # 二维码解析工具
-├── config.json      # 配置文件
-├── requirements.txt # 依赖清单
-└── README.md        # 说明文档
+├── main.py              # 主程序（消息监听）
+├── api_server.py        # REST API 服务端
+├── mock_server.py       # Mock 服务器（本地调试）
+├── tui_client.py        # TUI 终端客户端
+├── client.py            # Python SDK + 命令行客户端
+├── send_msg.py          # 快速发送消息脚本
+├── login.py             # 登录模块
+├── msg.py               # 消息收发模块
+├── stu.py               # 学生信息管理
+├── upload.py            # 文件上传模块
+├── upload_file.py       # 文件上传独立脚本
+├── funcs.py             # 工具函数
+├── init.py              # 全局配置（统一读取 config.json）
+├── yunban.py            # 云班功能扩展
+├── api.py               # m-campus API 调用网关
+├── auto_attend.py       # 自动签到脚本
+├── qrcode.py            # 二维码解析工具
+├── test_api.py          # API 测试脚本
+├── config.json.example  # 配置文件示例
+└── README.md            # 说明文档
 ```
 
 ## API相关说明
+
 详见[Seewo-API](https://github.com/cuitepiglin/seewo-api)

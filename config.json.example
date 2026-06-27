@@ -1,0 +1,11 @@
+{
+  "api_key": "your-secret-key",
+  "api_port": 5001,
+  "api_host": "0.0.0.0",
+  "poll_batch_size": 50,
+  "base_interval": 1,
+  "max_interval": 10,
+  "max_errors": 5,
+  "use_mock": false,
+  "mock_port": 9000
+}

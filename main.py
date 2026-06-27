@@ -20,20 +20,8 @@ from stu import stu  # noqa: E402
 from msg import msg  # noqa: E402
 from upload import Upload  # noqa: E402
 from yunban import getpass  # noqa: E402
+from init import config  # noqa: E402
 
-# 加载配置
-CONFIG_FILE = "config.json"
-
-
-def load_config() -> dict:
-    """加载配置文件"""
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-
-config = load_config()
 # 轮询配置：批量大小、基础间隔、最大间隔、连续错误上限
 POLL_BATCH_SIZE = config.get("poll_batch_size", 50)
 BASE_INTERVAL = config.get("base_interval", 1)

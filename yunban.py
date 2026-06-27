@@ -7,6 +7,15 @@ import requests
 from datetime import datetime, date, timedelta
 from login import acc
 from api import api
+from init import config
+
+
+def _get_yunban_base():
+    """获取云班 API 基础 URL（支持 mock 模式）"""
+    if config.get("use_mock"):
+        port = config.get("mock_port", 9000)
+        return f"http://localhost:{port}/mis-cloud-route-server"
+    return "https://campus.seewo.com/mis-cloud-route-server"
 
 
 def getpass(account: acc, schoolUid, snCode, time, classUid=""):
@@ -49,22 +58,26 @@ class yunban:
 
     def getclasslist(self):
         """获取学校下所有班级列表"""
-        url = f"https://campus.seewo.com/mis-cloud-route-server/api/classmember/v1/school/{self.schoolid}/classes"
+        base = _get_yunban_base()
+        url = f"{base}/api/classmember/v1/school/{self.schoolid}/classes"
         response = requests.request("GET", url, headers=self.headers)
         return response.json()["data"]
 
     def getnotes(self, uid, parentuid, num, size=1):
-        url = f"https://campus.seewo.com/mis-cloud-route-server/api/kidnote/v4/parent/{parentuid}/child/{uid}/notes?start={num}&pageSize={size}"
+        base = _get_yunban_base()
+        url = f"{base}/api/kidnote/v4/parent/{parentuid}/child/{uid}/notes?start={num}&pageSize={size}"
         response = requests.request("GET", url, headers=self.headers, verify=False)
         return response.json()["data"]
 
     def getparents(self, uid):
-        url = f"https://campus.seewo.com/mis-cloud-route-server/api/kidnote/v1/{uid}/parent/note/count"
+        base = _get_yunban_base()
+        url = f"{base}/api/kidnote/v1/{uid}/parent/note/count"
         response = requests.request("GET", url, headers=self.headers, verify=False)
         return response.json()["data"]
 
     def getstulist(self, classid):
-        url = f"https://campus.seewo.com/mis-cloud-route-server/api/classmember/v1/school/{self.schoolid}/students?classUids={classid}"
+        base = _get_yunban_base()
+        url = f"{base}/api/classmember/v1/school/{self.schoolid}/students?classUids={classid}"
         response = requests.request("GET", url, headers=self.headers, verify=False)
         return response.json()["data"][0]["students"]
 
@@ -81,7 +94,8 @@ class yunban:
         return {}
 
     def getevents(self, roomUid):
-        url = f"https://campus.seewo.com/mis-cloud-route-server/api/attendance/v3/{self.schoolid}/events?roomUid={roomUid}"
+        base = _get_yunban_base()
+        url = f"{base}/api/attendance/v3/{self.schoolid}/events?roomUid={roomUid}"
         response = requests.request("GET", url, headers=self.headers, verify=False)
         return response.json()["data"]
 
@@ -171,7 +185,8 @@ class yunban:
             ]
         }
         print(payload)
-        url = f"https://campus.seewo.com/mis-cloud-route-server/api/attendance/v1/{self.schoolid}/data"
+        base = _get_yunban_base()
+        url = f"{base}/api/attendance/v1/{self.schoolid}/data"
         response = requests.post(url, json=payload, headers=self.headers, verify=False)
         return response.json()
 
@@ -185,7 +200,8 @@ class yunban:
         voiceLength=0,
         resConfig="",
     ):
-        url = "https://campus.seewo.com/mis-cloud-route-server/api/kidnote/v1/note"
+        base = _get_yunban_base()
+        url = f"{base}/api/kidnote/v1/note"
 
         data = {
             "schoolUid": self.schoolid,

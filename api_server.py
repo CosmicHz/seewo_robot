@@ -8,13 +8,14 @@ import os
 import json
 import time
 import base64
+import logging
 import threading
 from flask import Flask, request, jsonify
 from functools import wraps
 
 os.chdir(os.path.dirname(__file__))
 
-from init import qrcode_file  # noqa: E402
+from init import qrcode_file, config  # noqa: E402
 from login import acc, download_qrcode, check_qrcode  # noqa: E402
 from funcs import write_file, load_chat_history, prepend_messages, update_earliest_id  # noqa: E402
 from stu import stu  # noqa: E402
@@ -23,19 +24,28 @@ from upload import Upload  # noqa: E402
 
 app = Flask(__name__)
 
-# 加载配置
-CONFIG_FILE = "config.json"
+# 日志配置
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("seewo.server")
+
+# 静默 Flask/Werkzeug 默认日志
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 
-def load_config() -> dict:
-    """加载配置文件"""
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+@app.before_request
+def log_request():
+    logger.info(">> %s %s", request.method, request.path)
 
 
-config = load_config()
+@app.after_request
+def log_response(response):
+    logger.info("<< %s %s -> %s", request.method, request.path, response.status_code)
+    return response
+
 API_KEY = config.get("api_key", "your-secret-key")
 API_PORT = config.get("api_port", 5000)
 API_HOST = config.get("api_host", "0.0.0.0")
@@ -263,10 +273,12 @@ def get_messages():
                 }
             )
 
+        # result 按时间倒序（新→旧），TUI 需要正序（旧→新）才能正确显示
+        messages.reverse()
         print(f"[API /api/messages] count={len(messages)}")
         if messages:
-            print(f"  首条: id={messages[0].get('id')}, sender={messages[0].get('sender')}, senderName={messages[0].get('senderName')}")
-            print(f"  末条: id={messages[-1].get('id')}, sender={messages[-1].get('sender')}, senderName={messages[-1].get('senderName')}")
+            print(f"  最早: id={messages[0].get('id')}, sender={messages[0].get('sender')}, senderName={messages[0].get('senderName')}")
+            print(f"  最新: id={messages[-1].get('id')}, sender={messages[-1].get('sender')}, senderName={messages[-1].get('senderName')}")
         return jsonify({"status": "ok", "count": len(messages), "messages": messages})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -687,6 +699,10 @@ if __name__ == "__main__":
     print(f"API Key: {API_KEY}")
     print(f"端口: {API_PORT}")
     print(f"主机: {API_HOST}")
+    if config.get("use_mock"):
+        print(f"[MOCK] 已启用 -> localhost:{config.get('mock_port', 9000)}")
+    else:
+        print("[MOCK] 未启用，连接真实服务器")
     print("=" * 50)
 
     app.run(host=API_HOST, port=API_PORT, debug=False)
