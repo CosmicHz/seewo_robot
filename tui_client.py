@@ -13,18 +13,8 @@ from textual.containers import Container, Horizontal
 from textual.widgets import Header, Footer, Static, Button, Input
 from textual.reactive import reactive
 
-# 加载配置
-CONFIG_FILE = "config.json"
+from init import config
 
-
-def load_config() -> dict:
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-
-config = load_config()
 API_KEY = config.get("api_key", "your-secret-key")
 API_URL = f"http://localhost:{config.get('api_port', 5000)}"
 

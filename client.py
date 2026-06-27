@@ -7,21 +7,10 @@ import os
 import json
 import requests
 
-# 加载配置
-CONFIG_FILE = "config.json"
+from init import config
 
-
-def load_config() -> dict:
-    """加载配置文件"""
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-
-_config = load_config()
-DEFAULT_API_KEY = _config.get("api_key", "your-secret-key")
-DEFAULT_API_URL = f"http://localhost:{_config.get('api_port', 5000)}"
+DEFAULT_API_KEY = config.get("api_key", "your-secret-key")
+DEFAULT_API_URL = f"http://localhost:{config.get('api_port', 5000)}"
 
 
 class SeewoClient:

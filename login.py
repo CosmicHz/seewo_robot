@@ -10,9 +10,12 @@ from qrcode import print_qrcode
 from init import token_file, qrcode_file, proxies, verify, headers_nocookie, urls
 from funcs import load_json, write_file
 import json
+import logging
 import requests
 import time
 import os
+
+logger = logging.getLogger("seewo.login")
 
 
 class acc:
@@ -116,12 +119,15 @@ class acc:
 
     def check_status(self):
         """调用希沃用户状态接口验证当前 Token 是否有效"""
+        url = urls().status + self.uid + "/functionality"
+        logger.info("GET %s", url)
         re = requests.get(
-            urls().status + self.uid + "/functionality",
+            url,
             headers=self.headers,
             proxies=proxies,
             verify=verify,
         )
+        logger.info("响应 status=%s body=%.200s", re.status_code, re.text)
         return self.status(re.text)
 
 
