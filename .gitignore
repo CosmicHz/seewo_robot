@@ -1,13 +1,31 @@
+# 数据文件
 *.json
-__pycache__
+
+# 日志
+logs/
+
+# 运行时生成
 *.png
 *.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+*.env
+
+# 临时/调试脚本
 debug.py
 music/
 getybnotes.py
 yunabn_token.py
 send.py
 
-venv/
-*.env
-.venv/
+# 编辑器
+.vscode/
+.idea/
+
+# 工具
+.ruff_cache/
