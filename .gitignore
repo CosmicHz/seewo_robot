@@ -2,7 +2,6 @@
 __pycache__
 *.png
 *.log
-test*
 debug.py
 music/
 getybnotes.py

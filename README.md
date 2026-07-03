@@ -156,6 +156,7 @@ seewo_robot/
 ├── auto_attend.py   # 自动签到脚本
 ├── qrcode.py        # 二维码解析工具
 ├── config.json      # 配置文件
+├── requirements.txt # 依赖清单
 └── README.md        # 说明文档
 ```
 
