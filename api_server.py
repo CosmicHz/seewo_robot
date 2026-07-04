@@ -46,6 +46,7 @@ def log_response(response):
     logger.info("<< %s %s -> %s", request.method, request.path, response.status_code)
     return response
 
+
 API_KEY = config.get("api_key", "your-secret-key")
 API_PORT = config.get("api_port", 5000)
 API_HOST = config.get("api_host", "0.0.0.0")
@@ -109,7 +110,13 @@ def _check_session():
     """检查会话是否有效，无效则返回需要登录的响应"""
     session.init()
     if session.needs_login:
-        return jsonify({"status": "error", "message": "Token已过期，需要重新登录", "need_login": True}), 401
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Token已过期，需要重新登录",
+                "need_login": True,
+            }
+        ), 401
     return None
 
 
@@ -153,12 +160,16 @@ def get_login_qrcode():
     """获取登录二维码（Base64编码图片），同时启动后台轮询"""
     with _login_lock:
         if _login_state["in_progress"]:
-            return jsonify({"status": "ok", "message": "登录流程进行中，请轮询 /api/login/status"})
+            return jsonify(
+                {"status": "ok", "message": "登录流程进行中，请轮询 /api/login/status"}
+            )
 
     try:
         cookies = download_qrcode()
         with _login_lock:
-            _login_state.update({"in_progress": True, "completed": False, "success": False})
+            _login_state.update(
+                {"in_progress": True, "completed": False, "success": False}
+            )
 
         # 读取二维码图片并转为 Base64
         with open(qrcode_file, "rb") as f:
@@ -275,10 +286,20 @@ def get_messages():
 
         # result 按时间倒序（新→旧），TUI 需要正序（旧→新）才能正确显示
         messages.reverse()
-        print(f"[API /api/messages] count={len(messages)}")
+        logger.info("/api/messages count=%d", len(messages))
         if messages:
-            print(f"  最早: id={messages[0].get('id')}, sender={messages[0].get('sender')}, senderName={messages[0].get('senderName')}")
-            print(f"  最新: id={messages[-1].get('id')}, sender={messages[-1].get('sender')}, senderName={messages[-1].get('senderName')}")
+            logger.info(
+                "  最早: id=%s, sender=%s, senderName=%s",
+                messages[0].get("id"),
+                messages[0].get("sender"),
+                messages[0].get("senderName"),
+            )
+            logger.info(
+                "  最新: id=%s, sender=%s, senderName=%s",
+                messages[-1].get("id"),
+                messages[-1].get("sender"),
+                messages[-1].get("senderName"),
+            )
         return jsonify({"status": "ok", "count": len(messages), "messages": messages})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -330,7 +351,6 @@ def send_image():
     if err:
         return err
     try:
-
         # 方式1: JSON body 传文件路径
         if request.is_json:
             data = request.get_json()
@@ -428,17 +448,35 @@ def get_history():
             messages.append(msg)
 
         result = {
-                "status": "ok",
-                "total": total,
-                "earliest_id": history.get("earliest_id", 0),
-                "last_id": history.get("last_id", 0),
-                "count": len(messages),
-                "messages": messages,
-            }
-        print(f"[API /api/history] total={total}, earliest_id={result['earliest_id']}, last_id={result['last_id']}, count={len(messages)}")
+            "status": "ok",
+            "total": total,
+            "earliest_id": history.get("earliest_id", 0),
+            "last_id": history.get("last_id", 0),
+            "count": len(messages),
+            "messages": messages,
+        }
+        logger.info(
+            "/api/history total=%d, earliest_id=%s, last_id=%s, count=%d",
+            total,
+            result["earliest_id"],
+            result["last_id"],
+            len(messages),
+        )
         if messages:
-            print(f"  首条: id={messages[0].get('id')}, sender={messages[0].get('sender')}, senderName={messages[0].get('senderName')}, content={str(messages[0].get('content',''))[:50]}")
-            print(f"  末条: id={messages[-1].get('id')}, sender={messages[-1].get('sender')}, senderName={messages[-1].get('senderName')}, content={str(messages[-1].get('content',''))[:50]}")
+            logger.info(
+                "  首条: id=%s, sender=%s, senderName=%s, content=%.50s",
+                messages[0].get("id"),
+                messages[0].get("sender"),
+                messages[0].get("senderName"),
+                messages[0].get("content", ""),
+            )
+            logger.info(
+                "  末条: id=%s, sender=%s, senderName=%s, content=%.50s",
+                messages[-1].get("id"),
+                messages[-1].get("sender"),
+                messages[-1].get("senderName"),
+                messages[-1].get("content", ""),
+            )
         return jsonify(result)
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -468,7 +506,13 @@ def load_earlier_messages():
             latest_msgs = session.stu_msg.get(count).get("result", [])
             if not latest_msgs:
                 return jsonify(
-                    {"status": "ok", "message": "暂无消息", "has_more": False, "count": 0, "messages": []}
+                    {
+                        "status": "ok",
+                        "message": "暂无消息",
+                        "has_more": False,
+                        "count": 0,
+                        "messages": [],
+                    }
                 )
             earliest_id = min(int(m.get("id", 0)) for m in latest_msgs)
 
@@ -537,10 +581,25 @@ def load_earlier_messages():
         # 判断是否还有更早的消息
         has_more = len(earlier_msgs) >= count
 
-        print(f"[API /api/load_earlier] earliest_id={earliest_id}, count={len(formatted_msgs)}, has_more={has_more}")
+        logger.info(
+            "/api/load_earlier earliest_id=%s, count=%d, has_more=%s",
+            earliest_id,
+            len(formatted_msgs),
+            has_more,
+        )
         if formatted_msgs:
-            print(f"  首条: id={formatted_msgs[0].get('id')}, sender={formatted_msgs[0].get('sender')}, senderName={formatted_msgs[0].get('senderName')}")
-            print(f"  末条: id={formatted_msgs[-1].get('id')}, sender={formatted_msgs[-1].get('sender')}, senderName={formatted_msgs[-1].get('senderName')}")
+            logger.info(
+                "  首条: id=%s, sender=%s, senderName=%s",
+                formatted_msgs[0].get("id"),
+                formatted_msgs[0].get("sender"),
+                formatted_msgs[0].get("senderName"),
+            )
+            logger.info(
+                "  末条: id=%s, sender=%s, senderName=%s",
+                formatted_msgs[-1].get("id"),
+                formatted_msgs[-1].get("sender"),
+                formatted_msgs[-1].get("senderName"),
+            )
 
         return jsonify(
             {
@@ -639,7 +698,11 @@ def sync_all_messages():
             update_earliest_id(min(m["id"] for m in formatted_msgs))
 
         total_count = len(load_chat_history().get("messages", []))
-        print(f"[API /api/sync_all] synced_count={len(formatted_msgs)}, total_count={total_count}")
+        logger.info(
+            "/api/sync_all synced_count=%d, total_count=%d",
+            len(formatted_msgs),
+            total_count,
+        )
         return jsonify(
             {
                 "status": "ok",
