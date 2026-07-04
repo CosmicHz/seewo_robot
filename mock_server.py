@@ -137,9 +137,9 @@ class MockData:
                 "startTime": "06:00",
                 "endTime": "08:30",
                 "roomUid": "mock_room_001",
-                "config": json.dumps({
-                    "banPaiConfig": {"topStartTime": "06:00", "topEndTime": "08:30"}
-                }),
+                "config": json.dumps(
+                    {"banPaiConfig": {"topStartTime": "06:00", "topEndTime": "08:30"}}
+                ),
             },
             {
                 "eventId": "event_afternoon",
@@ -147,9 +147,9 @@ class MockData:
                 "startTime": "13:00",
                 "endTime": "14:30",
                 "roomUid": "mock_room_001",
-                "config": json.dumps({
-                    "banPaiConfig": {"topStartTime": "13:00", "topEndTime": "14:30"}
-                }),
+                "config": json.dumps(
+                    {"banPaiConfig": {"topStartTime": "13:00", "topEndTime": "14:30"}}
+                ),
             },
         ]
 
@@ -170,7 +170,12 @@ class MockData:
             return
         old_uid = "mock_parent_001"
         print(f"[ADOPT] 新 UID {uid}，接管 {old_uid} 的身份和消息")
-        self.users[uid] = {"userId": uid, "token": "mock_token", "name": name, "type": "parent"}
+        self.users[uid] = {
+            "userId": uid,
+            "token": "mock_token",
+            "name": name,
+            "type": "parent",
+        }
         for m in self.messages:
             if m["senderUid"] == old_uid:
                 m["senderUid"] = uid
@@ -209,7 +214,7 @@ class MockData:
         ]
         msgs.sort(key=lambda m: m["id"], reverse=True)
         start = (page - 1) * page_size
-        return msgs[start:start + page_size]
+        return msgs[start : start + page_size]
 
     def save(self):
         data = {
@@ -265,7 +270,10 @@ def scan_qrcode():
 def check_qrcode():
     """查询扫码状态 - 自动确认登录，立即返回成功"""
     # 返回当前已知的家长用户（可能已被 adopt 过）
-    uid = list(mock_data.users.keys())[0] if mock_data.users else "mock_parent_001"
+    uid = next(
+        (u for u, v in mock_data.users.items() if v.get("type") == "parent"),  # 取第一个
+        "mock_parent_001"  # 回退到默认家长
+    )
     user = mock_data.users.get(uid, {})
     data = {
         "statusCode": 202,
@@ -288,7 +296,10 @@ def check_user_status(uid):
     return jsonify({"statusCode": 200, "message": "ok"})
 
 
-@app.route("/home-school-service/mobile/kidnote/v1/note/dialogs", methods=["GET"])
+@app.route(
+    "/soul-bootstrap/home-school-service/mobile/kidnote/v1/note/dialogs",
+    methods=["GET"]
+)
 def get_last_msg():
     """获取最近消息摘要"""
     user_uid = request.args.get("userUid", "")
@@ -301,7 +312,9 @@ def get_last_msg():
     latest = max(msgs, key=lambda m: m["id"])
     dialog = {
         "lastMsgTips": latest["content"],
-        "childUid": latest["receiverUid"] if latest["senderUid"] == user_uid else latest["senderUid"],
+        "childUid": latest["receiverUid"]
+        if latest["senderUid"] == user_uid
+        else latest["senderUid"],
     }
     return jsonify({"data": [dialog]})
 
@@ -386,23 +399,25 @@ def handle_upload_policy(params):
     return {
         "statusCode": 200,
         "data": {
-            "policyList": [{
-                "uploadUrl": f"http://localhost:{mock_port}/upload/cos",
-                "expireSeconds": 3600,
-                "formFields": [
-                    {"value": f"mock_key_{uuid.uuid4().hex[:8]}"},
-                    {"value": f"mock_policy_{uuid.uuid4().hex[:8]}"},
-                    {"value": f"mock_sig_{uuid.uuid4().hex[:8]}"},
-                    {"value": f"mock_key_time_{uuid.uuid4().hex[:8]}"},
-                    {"value": f"mock_ak_{uuid.uuid4().hex[:8]}"},
-                    {"value": "sha1"},
-                    {"value": f"mock_callback_{uuid.uuid4().hex[:8]}"},
-                    {"value": "200"},
-                    {"value": "10388"},
-                    {"value": f"mock_sid_{uuid.uuid4().hex[:8]}"},
-                    {"value": f"mock_bid_{uuid.uuid4().hex[:8]}"},
-                ],
-            }],
+            "policyList": [
+                {
+                    "uploadUrl": f"http://localhost:{mock_port}/upload/cos",
+                    "expireSeconds": 3600,
+                    "formFields": [
+                        {"value": f"mock_key_{uuid.uuid4().hex[:8]}"},
+                        {"value": f"mock_policy_{uuid.uuid4().hex[:8]}"},
+                        {"value": f"mock_sig_{uuid.uuid4().hex[:8]}"},
+                        {"value": f"mock_key_time_{uuid.uuid4().hex[:8]}"},
+                        {"value": f"mock_ak_{uuid.uuid4().hex[:8]}"},
+                        {"value": "sha1"},
+                        {"value": f"mock_callback_{uuid.uuid4().hex[:8]}"},
+                        {"value": "200"},
+                        {"value": "10388"},
+                        {"value": f"mock_sid_{uuid.uuid4().hex[:8]}"},
+                        {"value": f"mock_bid_{uuid.uuid4().hex[:8]}"},
+                    ],
+                }
+            ],
         },
     }
 
@@ -567,7 +582,10 @@ def mock_add_message():
     data = request.get_json(silent=True) or {}
     sender_uid = data.get("senderUid", "mock_student_001")
     # 默认接收者用当前家长 UID（可能已被 adopt 过）
-    default_parent = list(mock_data.users.keys())[0] if mock_data.users else "mock_parent_001"
+    default_parent = next(
+        (u for u, v in mock_data.users.items() if v.get("type") == "parent"),  # 取第一个
+        "mock_parent_001",  # 回退到默认家长
+    )
     sender_info = mock_data.students.get(sender_uid, {})
     msg = mock_data._add_message(
         sender_info.get("schoolUid", "mock_school_001"),
@@ -584,15 +602,17 @@ def mock_add_message():
 @app.route("/mock/data", methods=["GET"])
 def mock_get_data():
     """查看所有 mock 数据"""
-    return jsonify({
-        "users": mock_data.users,
-        "students": mock_data.students,
-        "classes": mock_data.classes,
-        "messages_count": len(mock_data.messages),
-        "messages": mock_data.messages,
-        "events": mock_data.events,
-        "uploads": mock_data.uploads,
-    })
+    return jsonify(
+        {
+            "users": mock_data.users,
+            "students": mock_data.students,
+            "classes": mock_data.classes,
+            "messages_count": len(mock_data.messages),
+            "messages": mock_data.messages,
+            "events": mock_data.events,
+            "uploads": mock_data.uploads,
+        }
+    )
 
 
 @app.route("/mock/reset", methods=["POST"])

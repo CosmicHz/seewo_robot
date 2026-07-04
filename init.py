@@ -73,21 +73,15 @@ class urls:
         self.time = str(int(time.time()) * 1000)
 
         if _use_mock:
-            base = _mock_base
-            self.status = f"{base}/soul-bootstrap/seewo-phoenix-blood-server/mobile/user/v1/"
-            self.get_last_msg = f"{base}/home-school-service/mobile/kidnote/v1/note/dialogs?userUid="
-            self.api = f"{base}/class/apis.json?action="
-            self.login_api = f"{base}/auth/loginApi?_time" + self.time
-            self.qrcode_image = f"{base}/scan/qrcode?oriSys=mis-admin&t=" + self.time
-            self.check_qrcode = f"{base}/scan/pcCheckQrcode?type=long&_=" + self.time
+            campus = mcampus = id_base = _mock_base
         else:
-            self.status = "https://campus.seewo.com/soul-bootstrap/seewo-phoenix-blood-server/mobile/user/v1/"
-            self.get_last_msg = "https://campus.seewo.com/home-school-service/mobile/kidnote/v1/note/dialogs?userUid="
-            self.api = "https://m-campus.seewo.com/class/apis.json?action="
-            self.login_api = "https://id.seewo.com/auth/loginApi?_time" + self.time
-            self.qrcode_image = (
-                "https://id.seewo.com/scan/qrcode?oriSys=mis-admin&t=" + self.time
-            )
-            self.check_qrcode = (
-                "https://id.seewo.com/scan/pcCheckQrcode?type=long&_=" + self.time
-            )
+            campus = "https://campus.seewo.com"
+            mcampus = "https://m-campus.seewo.com"
+            id_base = "https://id.seewo.com"
+
+        self.status = f"{campus}/soul-bootstrap/seewo-phoenix-blood-server/mobile/user/v1/"
+        self.get_last_msg = f"{campus}/soul-bootstrap/home-school-service/mobile/kidnote/v1/note/dialogs?userUid="
+        self.api = f"{mcampus}/class/apis.json?action="
+        self.login_api = f"{id_base}/auth/loginApi?_time" + self.time
+        self.qrcode_image = f"{id_base}/scan/qrcode?oriSys=mis-admin&t=" + self.time
+        self.check_qrcode = f"{id_base}/scan/pcCheckQrcode?type=long&_=" + self.time
