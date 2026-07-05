@@ -44,8 +44,8 @@ class api:
             verify=verify,
         )
         # 尝试解密响应体再输出
+        resp_json = json.loads(resp.text)
         try:
-            resp_json = json.loads(resp.text)
             if isinstance(resp_json, dict) and "data" in resp_json:
                 decoded = pxdecode(resp_json)
                 if isinstance(decoded, bytes):
@@ -55,5 +55,4 @@ class api:
                 logger.debug("响应 %s status=%s body=%.200s", url, resp.status_code, resp.text)
         except Exception:
             logger.debug("响应 %s status=%s body=%.200s", url, resp.status_code, resp.text)
-            resp_json = json.loads(resp.text)
         return resp_json
