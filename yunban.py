@@ -60,7 +60,7 @@ class yunban:
         """获取学校下所有班级列表"""
         base = _get_yunban_base()
         url = f"{base}/api/classmember/v1/school/{self.schoolid}/classes"
-        response = requests.request("GET", url, headers=self.headers)
+        response = requests.request("GET", url, headers=self.headers, verify=verify)
         return response.json()["data"]
 
     def getnotes(self, uid, parentuid, num, size=1):

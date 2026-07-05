@@ -37,7 +37,7 @@ class api:
         url = f"{base}/class/apis.json?action=" + type
         encode_data = {"action": type, "params": params}
         logger.debug("POST %s action=%s", url, type)
-        re = requests.post(
+        resp = requests.post(
             url,
             headers=account.mheaders,
             data=json.dumps(encode_data),
@@ -45,14 +45,15 @@ class api:
         )
         # 尝试解密响应体再输出
         try:
-            resp_json = json.loads(re.text)
+            resp_json = json.loads(resp.text)
             if isinstance(resp_json, dict) and "data" in resp_json:
                 decoded = pxdecode(resp_json)
                 if isinstance(decoded, bytes):
                     decoded = decoded.decode("utf-8")
-                logger.debug("响应 %s status=%s 解密=%.300s", url, re.status_code, decoded)
+                logger.debug("响应 %s status=%s 解密=%.300s", url, resp.status_code, decoded)
             else:
-                logger.debug("响应 %s status=%s body=%.200s", url, re.status_code, re.text)
+                logger.debug("响应 %s status=%s body=%.200s", url, resp.status_code, resp.text)
         except Exception:
-            logger.debug("响应 %s status=%s body=%.200s", url, re.status_code, re.text)
-        return json.loads(re.text)
+            logger.debug("响应 %s status=%s body=%.200s", url, resp.status_code, resp.text)
+            resp_json = json.loads(resp.text)
+        return resp_json
