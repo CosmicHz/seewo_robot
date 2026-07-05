@@ -159,7 +159,8 @@ Invoke-WebRequest -Uri "http://localhost:9000/mock/clear_messages" -Method POST
   "max_interval": 10,              // 最大轮询间隔(秒)
   "max_errors": 5,                 // 连续错误上限
   "use_mock": false,               // 启用 Mock 服务器
-  "mock_port": 9000                // Mock 服务器端口
+  "mock_port": 9000,               // Mock 服务器端口
+  "log_level": "INFO"              // 日志级别：INFO(默认) / DEBUG(调试)
 }
 ```
 

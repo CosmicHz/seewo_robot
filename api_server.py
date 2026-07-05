@@ -25,8 +25,9 @@ from upload import Upload  # noqa: E402
 app = Flask(__name__)
 
 # 日志配置
+LOG_LEVEL = getattr(logging, config.get("log_level", "INFO").upper(), logging.INFO)
 logging.basicConfig(
-    level=logging.INFO,
+    level=LOG_LEVEL,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%H:%M:%S",
 )
@@ -38,12 +39,12 @@ logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 @app.before_request
 def log_request():
-    logger.info(">> %s %s", request.method, request.path)
+    logger.debug(">> %s %s", request.method, request.path)
 
 
 @app.after_request
 def log_response(response):
-    logger.info("<< %s %s -> %s", request.method, request.path, response.status_code)
+    logger.debug("<< %s %s -> %s", request.method, request.path, response.status_code)
     return response
 
 
@@ -463,14 +464,14 @@ def get_history():
             len(messages),
         )
         if messages:
-            logger.info(
+            logger.debug(
                 "  首条: id=%s, sender=%s, senderName=%s, content=%.50s",
                 messages[0].get("id"),
                 messages[0].get("sender"),
                 messages[0].get("senderName"),
                 messages[0].get("content", ""),
             )
-            logger.info(
+            logger.debug(
                 "  末条: id=%s, sender=%s, senderName=%s, content=%.50s",
                 messages[-1].get("id"),
                 messages[-1].get("sender"),

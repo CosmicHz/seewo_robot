@@ -36,7 +36,7 @@ class api:
         base = _get_api_base()
         url = f"{base}/class/apis.json?action=" + type
         encode_data = {"action": type, "params": params}
-        logger.info("POST %s action=%s", url, type)
+        logger.debug("POST %s action=%s", url, type)
         re = requests.post(
             url,
             headers=account.mheaders,
@@ -50,9 +50,9 @@ class api:
                 decoded = pxdecode(resp_json)
                 if isinstance(decoded, bytes):
                     decoded = decoded.decode("utf-8")
-                logger.info("响应 %s status=%s 解密=%.300s", url, re.status_code, decoded)
+                logger.debug("响应 %s status=%s 解密=%.300s", url, re.status_code, decoded)
             else:
-                logger.info("响应 %s status=%s body=%.200s", url, re.status_code, re.text)
+                logger.debug("响应 %s status=%s body=%.200s", url, re.status_code, re.text)
         except Exception:
-            logger.info("响应 %s status=%s body=%.200s", url, re.status_code, re.text)
+            logger.debug("响应 %s status=%s body=%.200s", url, re.status_code, re.text)
         return json.loads(re.text)
