@@ -120,14 +120,14 @@ class acc:
     def check_status(self):
         """调用希沃用户状态接口验证当前 Token 是否有效"""
         url = urls().status + self.uid + "/functionality"
-        logger.info("GET %s", url)
+        logger.debug("GET %s", url)
         re = requests.get(
             url,
             headers=self.headers,
             proxies=proxies,
             verify=verify,
         )
-        logger.info("响应 status=%s body=%.200s", re.status_code, re.text)
+        logger.debug("响应 status=%s body=%.200s", re.status_code, re.text)
         return self.status(re.text)
 
 

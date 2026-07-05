@@ -7,5 +7,6 @@
   "max_interval": 10,
   "max_errors": 5,
   "use_mock": false,
-  "mock_port": 9000
+  "mock_port": 9000,
+  "log_level": "INFO"
 }

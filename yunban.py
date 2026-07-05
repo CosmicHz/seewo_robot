@@ -7,7 +7,7 @@ import requests
 from datetime import datetime, date, timedelta
 from login import acc
 from api import api
-from init import config
+from init import config, verify
 
 
 def _get_yunban_base():
@@ -66,19 +66,19 @@ class yunban:
     def getnotes(self, uid, parentuid, num, size=1):
         base = _get_yunban_base()
         url = f"{base}/api/kidnote/v4/parent/{parentuid}/child/{uid}/notes?start={num}&pageSize={size}"
-        response = requests.request("GET", url, headers=self.headers, verify=False)
+        response = requests.request("GET", url, headers=self.headers, verify=verify)
         return response.json()["data"]
 
     def getparents(self, uid):
         base = _get_yunban_base()
         url = f"{base}/api/kidnote/v1/{uid}/parent/note/count"
-        response = requests.request("GET", url, headers=self.headers, verify=False)
+        response = requests.request("GET", url, headers=self.headers, verify=verify)
         return response.json()["data"]
 
     def getstulist(self, classid):
         base = _get_yunban_base()
         url = f"{base}/api/classmember/v1/school/{self.schoolid}/students?classUids={classid}"
-        response = requests.request("GET", url, headers=self.headers, verify=False)
+        response = requests.request("GET", url, headers=self.headers, verify=verify)
         return response.json()["data"][0]["students"]
 
     def searchstubyname(self, stuname, students):
@@ -96,7 +96,7 @@ class yunban:
     def getevents(self, roomUid):
         base = _get_yunban_base()
         url = f"{base}/api/attendance/v3/{self.schoolid}/events?roomUid={roomUid}"
-        response = requests.request("GET", url, headers=self.headers, verify=False)
+        response = requests.request("GET", url, headers=self.headers, verify=verify)
         return response.json()["data"]
 
     # Get time from events
@@ -187,7 +187,7 @@ class yunban:
         print(payload)
         base = _get_yunban_base()
         url = f"{base}/api/attendance/v1/{self.schoolid}/data"
-        response = requests.post(url, json=payload, headers=self.headers, verify=False)
+        response = requests.post(url, json=payload, headers=self.headers, verify=verify)
         return response.json()
 
     def send_msg(
@@ -236,7 +236,7 @@ class yunban:
         # post=api().action("POST_KIDNOTE_V1_NOTE",data,self.acc)
         # code = post["statusCode"]
 
-        response = requests.post(url, json=data, headers=self.headers, verify=False)
+        response = requests.post(url, json=data, headers=self.headers, verify=verify)
         code = response.status_code
         if code == -500:
             print("发送失败")

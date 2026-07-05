@@ -1,12 +1,17 @@
 # Seewo 班牌机器人
+>
 > [!WARNING]
+>
 > ## 该项目正在开发中，请勿用于学习环境，否则可能会带来严重后果！
 
 ## 介绍
+
 Seewo 班牌机器人是一个用于「希沃云班」微信小程序或「希沃魔方」APP的聊天机器人
 
 ## 功能
+
 该程序利用「希沃统一服务平台」的相关API实现「希沃云班」的「亲情留言」以及相关功能，已实现的有：
+
 - 微信二维码登录
 - 留言接收与实时显示
 - 留言发送（文本/图片/音频）
@@ -66,6 +71,7 @@ python tui_client.py
 ```
 
 **TUI 快捷键：**
+
 | 键 | 功能 |
 |----|------|
 | `R` | 刷新消息 |
@@ -111,6 +117,7 @@ python main.py
 ```
 
 **Mock 管理接口：**
+
 | 接口 | 方法 | 功能 |
 |------|------|------|
 | `/mock/add_message` | POST | 模拟学生发送消息 |
@@ -121,6 +128,7 @@ python main.py
 | `/mock/load` | POST | 从文件加载数据 |
 
 模拟学生发消息示例：
+
 ```bash
 # Linux/macOS
 curl -X POST http://localhost:9000/mock/add_message \
@@ -132,6 +140,7 @@ Invoke-WebRequest -Uri "http://localhost:9000/mock/add_message" -Method POST -Co
 ```
 
 清空消息：
+
 ```powershell
 Invoke-WebRequest -Uri "http://localhost:9000/mock/clear_messages" -Method POST
 ```
@@ -150,7 +159,8 @@ Invoke-WebRequest -Uri "http://localhost:9000/mock/clear_messages" -Method POST
   "max_interval": 10,              // 最大轮询间隔(秒)
   "max_errors": 5,                 // 连续错误上限
   "use_mock": false,               // 启用 Mock 服务器
-  "mock_port": 9000                // Mock 服务器端口
+  "mock_port": 9000,               // Mock 服务器端口
+  "log_level": "INFO"              // 日志级别：INFO(默认) / DEBUG(调试)
 }
 ```
 
@@ -220,4 +230,5 @@ seewo_robot/
 ```
 
 ## API相关说明
+
 详见[Seewo-API](https://github.com/cmy2008/api-collet/blob/main/seewo/readme.md)
