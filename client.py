@@ -35,9 +35,17 @@ class SeewoClient:
         """获取消息列表"""
         return self._request("GET", "/api/messages", params={"count": count})
 
-    def send_text(self, content: str) -> dict:
-        """发送文本消息"""
-        return self._request("POST", "/api/send", json={"content": content})
+    def send_text(self, content: str, strategy: str = None) -> dict:
+        """发送文本消息
+
+        Args:
+            content: 消息内容
+            strategy: 可选，长消息策略 "truncate"|"split"，缺省取服务端全局配置
+        """
+        payload = {"content": content}
+        if strategy:
+            payload["strategy"] = strategy
+        return self._request("POST", "/api/send", json=payload)
 
     def send_image(
         self,
@@ -110,6 +118,12 @@ def main():
     # send
     send_parser = subparsers.add_parser("send", help="发送文本消息")
     send_parser.add_argument("content", help="消息内容")
+    send_parser.add_argument(
+        "--strategy",
+        choices=["truncate", "split"],
+        default=None,
+        help="长消息策略：truncate(截断) / split(拆分多条)，缺省取服务端全局配置",
+    )
 
     # image
     img_parser = subparsers.add_parser("image", help="发送图片")
@@ -137,7 +151,7 @@ def main():
     elif args.command == "messages":
         result = client.get_messages(count=args.count)
     elif args.command == "send":
-        result = client.send_text(args.content)
+        result = client.send_text(args.content, strategy=args.strategy)
     elif args.command == "image":
         result = client.send_image(file_path=args.file)
     elif args.command == "audio":
