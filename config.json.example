@@ -8,5 +8,6 @@
   "max_errors": 5,
   "use_mock": false,
   "mock_port": 9000,
+  "long_message_strategy": "truncate",
   "log_level": "INFO"
 }

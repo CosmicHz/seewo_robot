@@ -52,6 +52,12 @@ API_KEY = config.get("api_key", "your-secret-key")
 API_PORT = config.get("api_port", 5000)
 API_HOST = config.get("api_host", "0.0.0.0")
 
+# 长消息处理策略：truncate=截断为199字(默认) / split=拆分多条发送
+# 注：希沃服务器对单条留言强制200字硬上限，超长返回 statusCode=40000
+# 仅影响 api_server 路径；main.py 自有硬编码截断，不读此项
+LONG_MSG_STRATEGY = config.get("long_message_strategy", "truncate")
+MSG_MAX_LEN = 199
+
 
 def require_api_key(f):
     """API密钥验证装饰器"""
@@ -313,6 +319,8 @@ def send_message():
 
     JSON body:
         content: 消息内容
+        strategy: 可选，长消息处理策略 "truncate"|"split"，缺省取全局配置
+                  truncate=截断为199字(默认) / split=按199字拆分多条发送
     """
     err = _check_session()
     if err:
@@ -320,20 +328,55 @@ def send_message():
     try:
         data = request.get_json()
         content = data.get("content", "")
+        strategy = data.get("strategy") or LONG_MSG_STRATEGY
 
         if not content:
             return jsonify({"status": "error", "message": "content is required"}), 400
 
-        if len(content) > 199:
-            content = content[:196] + "..."
+        # 短消息：直接发送
+        if len(content) <= MSG_MAX_LEN:
+            success = session.stu_msg.send(content, 1)
+            return jsonify(
+                {
+                    "status": "ok" if success else "error",
+                    "message": "发送成功" if success else "发送失败",
+                }
+            )
 
-        success = session.stu_msg.send(content, 1)
-        return jsonify(
-            {
-                "status": "ok" if success else "error",
-                "message": "发送成功" if success else "发送失败",
-            }
-        )
+        # 长消息：按策略处理
+        if strategy == "split":
+            chunks = [
+                content[i : i + MSG_MAX_LEN]
+                for i in range(0, len(content), MSG_MAX_LEN)
+            ]
+            results = []
+            for chunk in chunks:
+                results.append(bool(session.stu_msg.send(chunk, 1)))
+            success = all(results)
+            return jsonify(
+                {
+                    "status": "ok" if success else "error",
+                    "strategy": "split",
+                    "chunks": len(chunks),
+                    "results": results,
+                    "message": (
+                        f"已拆分为 {len(chunks)} 条发送"
+                        if success
+                        else f"部分发送失败({sum(results)}/{len(chunks)})"
+                    ),
+                }
+            )
+        else:  # truncate（默认）
+            content = content[: MSG_MAX_LEN - 3] + "..."
+            success = session.stu_msg.send(content, 1)
+            return jsonify(
+                {
+                    "status": "ok" if success else "error",
+                    "strategy": "truncate",
+                    "truncated": True,
+                    "message": "发送成功" if success else "发送失败",
+                }
+            )
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
