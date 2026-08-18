@@ -2,7 +2,7 @@
 >
 > [!WARNING]
 >
-> ## 该项目正在开发中，请勿用于学习环境，否则可能会带来严重后果
+> **该项目正在开发中，请勿用于学习环境，否则可能会带来严重后果！**
 
 ## 介绍
 
@@ -199,13 +199,13 @@ Invoke-WebRequest -Uri "http://localhost:9000/mock/clear_messages" -Method POST
 当收到以 `/` 开头的消息时，会执行命令：
 
 | 命令 | 功能 |
-|------|------|
+| ------ | ------ |
 | `/getpass <schoolUid> <snCode>` | 获取离线验证码 |
 | `/发送音乐` | 发送 music/ 目录下的音频 |
 
 ## 项目结构
 
-```
+```text
 seewo_robot/
 ├── main.py              # 主程序（消息监听）
 ├── api_server.py        # REST API 服务端
