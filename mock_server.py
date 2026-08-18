@@ -34,6 +34,8 @@ app = Flask(__name__)
 
 MOCK_PORT = 9000
 DATA_FILE = "mock_data.json"
+# 模拟希沃服务器：单条留言内容长度上限，超过返回 statusCode=40000
+SEEWO_CONTENT_MAX_LEN = 200
 
 
 # ============ 工具函数 ============
@@ -369,6 +371,10 @@ def handle_get_notes(params):
 
 def handle_post_note(params):
     """发送留言"""
+    content = params.get("content", "")
+    # 模拟希沃服务器：留言内容不能超过200字符
+    if len(content) > SEEWO_CONTENT_MAX_LEN:
+        return {"statusCode": 40000, "message": "留言内容不能超过200字符"}
     sender_uid = params.get("senderUid", "")
     mock_data.adopt_parent(sender_uid)
     msg = mock_data._add_message(
@@ -378,7 +384,7 @@ def handle_post_note(params):
         params.get("receiverUid", ""),
         params.get("senderType", "parent"),
         params.get("type", 1),
-        params.get("content", ""),
+        content,
         resUrl=params.get("resUrl", ""),
         voiceLength=params.get("voiceLength", 0),
     )
@@ -517,6 +523,10 @@ def submit_attendance(school_uid):
 def yunban_send_note():
     """云班直接发送留言"""
     data = request.get_json(silent=True) or {}
+    content = data.get("content", "")
+    # 模拟希沃服务器：留言内容不能超过200字符
+    if len(content) > SEEWO_CONTENT_MAX_LEN:
+        return jsonify({"statusCode": 40000, "message": "留言内容不能超过200字符"}), 400
     msg = mock_data._add_message(
         data.get("schoolUid", ""),
         data.get("classUid", ""),
@@ -524,7 +534,7 @@ def yunban_send_note():
         data.get("receiverUid", ""),
         data.get("senderType", "student"),
         data.get("type", 1),
-        data.get("content", ""),
+        content,
         resUrl=data.get("resUrl", ""),
         voiceLength=data.get("voiceLength", 0),
     )
