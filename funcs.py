@@ -5,6 +5,8 @@ import json
 import time
 import os
 
+from init import _use_mock
+
 filedate = time.strftime("%Y-%m-%d", time.localtime())
 
 
@@ -51,8 +53,8 @@ def logw(t: str) -> None:
         file.write(log)
 
 
-# 聊天记录存储
-CHAT_LOG_FILE = "chat_history.json"
+# 聊天记录存储（mock 模式用独立文件，避免测试数据污染真实记录）
+CHAT_LOG_FILE = "chat_history_mock.json" if _use_mock else "chat_history.json"
 
 
 def load_chat_history() -> dict:
