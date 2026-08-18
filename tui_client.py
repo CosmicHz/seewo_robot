@@ -10,13 +10,29 @@ import asyncio
 import base64
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
-from textual.widgets import Header, Footer, Static, Button, Input
+from textual.widgets import Header, Footer, Static, Button, Input, Checkbox
 from textual.reactive import reactive
 
 from init import config
 
 API_KEY = config.get("api_key", "your-secret-key")
 API_URL = f"http://localhost:{config.get('api_port', 5000)}"
+
+
+class CheckMark(Checkbox):
+    """复选框（用 ✓ 标记代替默认的 X）
+
+    Textual 的 Checkbox 默认以 "X" 标记选中状态，改为对号 ✓ 更直观。
+    未选中时显示空格，保持方框为空。
+    """
+
+    BUTTON_INNER = " "  # 未选中：空方框
+
+    def toggle(self) -> None:
+        # 在 value 翻转前决定下一个标记：当前未选中 -> 即将选中用 ✓；反之留空
+        self.__class__.BUTTON_INNER = "✓" if not self.value else " "
+        self.value = not self.value
+        return self
 
 
 class MessageWidget(Static):
@@ -162,6 +178,7 @@ class SeewoTUI(App):
             Container(id="message-list", classes="message-list"),
             Horizontal(
                 Input(placeholder="输入消息内容...", id="msg-input"),
+                CheckMark("拆分模式", id="split-mode"),
                 Button("发送", id="send-btn"),
                 classes="input-area",
             ),
@@ -417,18 +434,33 @@ class SeewoTUI(App):
         else:
             container.scroll_end(animate=False)
 
-    async def send_message(self, content: str) -> None:
-        """发送消息"""
+    async def send_message(self, content: str, strategy: str = None) -> None:
+        """发送消息
+
+        Args:
+            content: 消息内容
+            strategy: 可选，长消息策略 "truncate"|"split"；缺省时读「拆分模式」复选框，
+                      勾选则用 split，否则取服务端全局配置
+        """
         if not content:
             return
 
         try:
             import requests
 
+            if strategy is None:
+                try:
+                    if self.query_one("#split-mode", CheckMark).value:
+                        strategy = "split"
+                except Exception:
+                    pass
+            payload = {"content": content}
+            if strategy:
+                payload["strategy"] = strategy
             resp = requests.post(
                 f"{API_URL}/api/send",
                 headers={"X-API-Key": API_KEY},
-                json={"content": content},
+                json=payload,
                 timeout=5,
             )
             if resp.status_code == 200:
