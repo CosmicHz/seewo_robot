@@ -9,5 +9,6 @@
   "use_mock": false,
   "mock_port": 9000,
   "long_message_strategy": "truncate",
+  "long_message_split_pattern": "\\r?\\n",
   "log_level": "INFO"
 }

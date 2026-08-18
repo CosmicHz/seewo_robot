@@ -5,6 +5,7 @@
 """
 
 import os
+import re
 import json
 import time
 import base64
@@ -57,6 +58,49 @@ API_HOST = config.get("api_host", "0.0.0.0")
 # 仅影响 api_server 路径；main.py 自有硬编码截断，不读此项
 LONG_MSG_STRATEGY = config.get("long_message_strategy", "truncate")
 MSG_MAX_LEN = 199
+
+# 长消息拆分模式：按正则匹配点智能拆分，匹配到的字符跟到后段开头（不丢失）
+# 默认 \r?\n —— 在 CRLF(Windows) 或 LF(Unix) 之前切割，换行符整体跟到下一段开头，
+# 不会把 \r 与 \n 拆散到两段。空字符串 = 禁用智能拆分，回退到硬切 MSG_MAX_LEN 字符
+# 仅影响 api_server 路径的 split 策略；main.py 不读此项
+LONG_MSG_SPLIT_PATTERN = config.get("long_message_split_pattern", r"\r?\n")
+_SPLIT_REGEX = None
+if LONG_MSG_SPLIT_PATTERN:
+    try:
+        _SPLIT_REGEX = re.compile(LONG_MSG_SPLIT_PATTERN)
+    except re.error as e:
+        logger.warning(
+            "long_message_split_pattern 编译失败，回退硬切: %s (pattern=%r)",
+            e,
+            LONG_MSG_SPLIT_PATTERN,
+        )
+        _SPLIT_REGEX = None
+
+
+def _split_long_message(content: str, max_len: int = MSG_MAX_LEN) -> list:
+    """按 _SPLIT_REGEX 智能拆分长消息
+
+    - 在每段前 max_len 字符范围内，找最后一个正则匹配点，在匹配点之前切割；
+      匹配到的字符（如换行符）跟到下一段开头，不丢失。
+    - 无匹配点、或唯一匹配落在段首会导致空段时，回退到硬切 max_len 字符。
+    - _SPLIT_REGEX 为 None（配置禁用或编译失败）时，全程硬切 max_len 字符。
+    """
+    chunks = []
+    rest = content
+    while len(rest) > max_len:
+        cut = 0
+        if _SPLIT_REGEX is not None:
+            # 在前 max_len 字符范围内取最后一个 start>0 的匹配，避免空段
+            for m in _SPLIT_REGEX.finditer(rest, 0, max_len):
+                if m.start() > 0:
+                    cut = m.start()
+        if cut == 0:
+            cut = max_len
+        chunks.append(rest[:cut])
+        rest = rest[cut:]
+    if rest:
+        chunks.append(rest)
+    return chunks
 
 
 def require_api_key(f):
@@ -321,6 +365,9 @@ def send_message():
         content: 消息内容
         strategy: 可选，长消息处理策略 "truncate"|"split"，缺省取全局配置
                   truncate=截断为199字(默认) / split=按199字拆分多条发送
+                  split 模式下，拆分位置优先取 long_message_split_pattern 正则
+                  匹配点（默认 \r?\n，兼容 CRLF 与 LF）之前，匹配字符整体
+                  跟到下一段开头；无处可拆时回退到硬切 199 字
     """
     err = _check_session()
     if err:
@@ -345,10 +392,7 @@ def send_message():
 
         # 长消息：按策略处理
         if strategy == "split":
-            chunks = [
-                content[i : i + MSG_MAX_LEN]
-                for i in range(0, len(content), MSG_MAX_LEN)
-            ]
+            chunks = _split_long_message(content)
             results = []
             for chunk in chunks:
                 results.append(bool(session.stu_msg.send(chunk, 1)))
