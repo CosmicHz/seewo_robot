@@ -18,7 +18,7 @@ os.chdir(os.path.dirname(__file__))
 
 from init import qrcode_file, config  # noqa: E402
 from login import acc, download_qrcode, check_qrcode  # noqa: E402
-from funcs import write_file, load_chat_history, prepend_messages, update_earliest_id  # noqa: E402
+from funcs import write_file, load_chat_history, merge_messages, update_earliest_id  # noqa: E402
 from stu import stu  # noqa: E402
 from msg import msg  # noqa: E402
 from upload import Upload  # noqa: E402
@@ -335,8 +335,8 @@ def get_messages():
                 }
             )
 
-        # result 按时间倒序（新→旧），TUI 需要正序（旧→新）才能正确显示
-        messages.reverse()
+        # 按 ID 排序，确保顺序稳定为旧→新，不依赖服务器返回的原始顺序
+        messages.sort(key=lambda m: m["id"])
         logger.info("/api/messages count=%d", len(messages))
         if messages:
             logger.info(
@@ -514,6 +514,9 @@ def get_history():
         history = load_chat_history()
         raw_messages = history.get("messages", [])
 
+        # 按 ID 排序，确保顺序稳定为旧→新（本地文件可能是历史遗留的倒序）
+        raw_messages = sorted(raw_messages, key=lambda m: m.get("id", 0))
+
         # 分页
         total = len(raw_messages)
         raw_messages = raw_messages[offset : offset + limit]
@@ -663,8 +666,8 @@ def load_earlier_messages():
             }
             formatted_msgs.append(formatted_msg)
 
-        # 插入到本地历史开头
-        prepend_messages(formatted_msgs)
+        # 与本地历史合并（merge_messages 内部会排序消息）
+        merge_messages(formatted_msgs)
 
         # 判断是否还有更早的消息
         has_more = len(earlier_msgs) >= count
@@ -778,8 +781,8 @@ def sync_all_messages():
             }
             formatted_msgs.append(formatted_msg)
 
-        # 插入到本地历史开头
-        prepend_messages(formatted_msgs)
+        # 与本地历史合并（merge_messages 内部会排序消息）
+        merge_messages(formatted_msgs)
 
         # 更新 earliest_id
         if formatted_msgs:

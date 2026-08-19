@@ -57,8 +57,11 @@ def logw(t: str) -> None:
 CHAT_LOG_FILE = "chat_history_mock.json" if _use_mock else "chat_history.json"
 
 
-def load_chat_history() -> dict:
-    """加载聊天记录，返回 {last_id: int, earliest_id: int, messages: list}"""
+def load_chat_history() -> dict[str, any]:
+    """从文件加载聊天记录.
+    
+    Returns:
+        聊天记录数据，形式为{'last_id': int, 'earliest_id': int, 'messages': list}"""
     if os.path.exists(CHAT_LOG_FILE):
         try:
             data = load_json(CHAT_LOG_FILE)
@@ -74,8 +77,8 @@ def load_chat_history() -> dict:
     return {"last_id": 0, "earliest_id": 0, "messages": []}
 
 
-def save_chat_history(history: dict) -> None:
-    """保存聊天记录"""
+def save_chat_history(history: dict[str, any]) -> None:
+    """保存聊天记录到文件"""
     with open(CHAT_LOG_FILE, "w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
 
@@ -111,13 +114,24 @@ def append_message(
     save_chat_history(history)
 
 
-def prepend_messages(messages: list) -> None:
-    """在聊天记录开头插入历史消息（用于加载更早的消息）"""
+def merge_messages(messages: list) -> None:
+    """批量合并消息到聊天记录（用于加载更早的历史消息）
+
+    合并后按 ID 排序，确保顺序为旧→新（与 append_message 行为一致），
+    不假设传入 messages 的顺序，也不假设它们与本地已有消息的相对位置。
+    例如 sync_all 传入的 messages 可能同时包含比本地 earliest_id 更早与更晚
+    的消息，本函数统一按 ID 归并排序后落盘。
+
+    Args:
+        messages: 待合并的消息列表，每条需含 "id" 字段
+    """
     if not messages:
         return
     history = load_chat_history()
-    # 插入到开头
-    history["messages"] = messages + history["messages"]
+    # 合并后按ID排序，确保顺序正确（旧→新）
+    history["messages"] = sorted(
+        messages + history["messages"], key=lambda m: m["id"]
+    )
     # 更新最早消息ID
     min_id = min(m["id"] for m in messages)
     if history["earliest_id"] == 0 or min_id < history["earliest_id"]:

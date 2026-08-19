@@ -208,13 +208,13 @@ class MockData:
         return msg
 
     def get_messages(self, parent_uid, child_uid, page=1, page_size=10):
-        """获取两人之间的消息，按 ID 倒序（新→旧）"""
+        """获取两人之间的消息，按 ID 升序（旧→新），对齐生产希沃服务器"""
         msgs = [
             m for m in self.messages
             if (m["senderUid"] == parent_uid and m["receiverUid"] == child_uid)
             or (m["senderUid"] == child_uid and m["receiverUid"] == parent_uid)
         ]
-        msgs.sort(key=lambda m: m["id"], reverse=True)
+        msgs.sort(key=lambda m: m["id"])
         start = (page - 1) * page_size
         return msgs[start : start + page_size]
 

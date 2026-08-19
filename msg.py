@@ -92,17 +92,25 @@ class msg:
         return result[0]["id"]
 
     def get_all_ids(self, count: int) -> list[int]:
-        """获取多条消息的ID列表，按时间正序排列（旧→新）"""
+        """获取多条消息的ID列表，按时间正序排列（旧→新）
+
+        内部按 ID 排序，不依赖服务器返回的原始顺序。
+        """
         result = self.get(count).get("result", [])
-        return [m["id"] for m in reversed(result)]
+        ids = [m["id"] for m in result]
+        return sorted(ids)
 
     def get_content_by_index(self, count: int, index: int) -> str:
-        """获取第index条消息的内容（0=最新）"""
-        return self.get(count)["result"][index]["content"]
+        """获取第index条消息的内容（0=最旧，按ID升序）"""
+        result = self.get(count)["result"]
+        result = sorted(result, key=lambda m: m.get("id", 0))
+        return result[index]["content"]
 
     def get_msg_detail(self, count: int, index: int) -> dict:
-        """获取第index条消息的完整信息（0=最新）"""
-        return self.get(count)["result"][index]
+        """获取第index条消息的完整信息（0=最旧，按ID升序）"""
+        result = self.get(count)["result"]
+        result = sorted(result, key=lambda m: m.get("id", 0))
+        return result[index]
 
     def get_earlier_messages(self, before_id: int, count: int = 50) -> list[dict]:
         """获取指定ID之前的更早消息（用于滚动加载历史）
@@ -112,14 +120,15 @@ class msg:
             count: 获取数量
 
         Returns:
-            消息列表，按时间正序排列（旧→新）
+            消息列表，按时间正序排列（旧→新），内部按ID排序，不依赖服务器返回顺序
         """
         # 获取足够多的消息，然后筛选
         result = self.get(count * 2).get("result", [])
         # 筛选 ID < before_id 的消息
         earlier = [m for m in result if int(m.get("id", 0)) < before_id]
-        # 按时间正序排列（旧→新）
-        return list(reversed(earlier[:count]))
+        # 按 ID 排序确保旧→新，不依赖服务器返回顺序
+        earlier = sorted(earlier, key=lambda m: m.get("id", 0))
+        return earlier[:count]
 
     def get_all_messages_until_earliest(
         self, start_id: int, batch_size: int = 50, delay: float = 2.0
@@ -156,7 +165,8 @@ class msg:
 
             time.sleep(delay)
 
-        return all_messages
+        # 多批拼接后整体顺序不保证，统一按 ID 排序
+        return sorted(all_messages, key=lambda m: m.get("id", 0))
 
     def delete(self, count: int):
         id = self.get_id(count)
