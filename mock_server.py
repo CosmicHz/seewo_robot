@@ -207,16 +207,26 @@ class MockData:
         self.messages.append(msg)
         return msg
 
-    def get_messages(self, parent_uid, child_uid, page=1, page_size=10):
-        """获取两人之间的消息，按 ID 升序（旧→新），对齐生产希沃服务器"""
+    def get_messages(self, parent_uid, child_uid, start=1, page_size=10):
+        """获取两人之间的消息，按 start 分页（对齐生产希沃服务器）
+
+        生产实测语义：
+        - start 是 1-based 页码：start=1=最新一页，start 递增往更旧方向翻页
+        - 每页 page_size 条，页间无重叠；页内按 id 升序（旧→新）
+        - start<1 非法（生产返回 SQL 语法错误 statusCode=50000），由调用方处理
+        """
         msgs = [
             m for m in self.messages
             if (m["senderUid"] == parent_uid and m["receiverUid"] == child_uid)
             or (m["senderUid"] == child_uid and m["receiverUid"] == parent_uid)
         ]
-        msgs.sort(key=lambda m: m["id"])
-        start = (page - 1) * page_size
-        return msgs[start : start + page_size]
+        # 全局按 id 降序（新→旧），切出第 start 页（1-based）
+        msgs.sort(key=lambda m: m["id"], reverse=True)
+        begin = (start - 1) * page_size
+        page_msgs = msgs[begin : begin + page_size]
+        # 页内按 id 升序（旧→新），对齐生产
+        page_msgs.sort(key=lambda m: m["id"])
+        return page_msgs
 
     def save(self):
         data = {
@@ -361,10 +371,17 @@ def handle_get_notes(params):
     parent_uid = params.get("parentUid", "")
     child_uid = params.get("childUid", "")
     mock_data.adopt_parent(parent_uid)
-    page = params.get("page", 1)
+    # 对齐生产：start 是真分页参数（1-based 页码），page 字段无效可省略
+    start = params.get("start", 1)
     page_size = params.get("pageSize", 10)
-    print(f"[NOTES] parentUid={parent_uid}, childUid={child_uid}, 总消息数={len(mock_data.messages)}")
-    msgs = mock_data.get_messages(parent_uid, child_uid, page, page_size)
+    print(f"[NOTES] parentUid={parent_uid}, childUid={child_uid}, start={start}, 总消息数={len(mock_data.messages)}")
+    # 对齐生产：start<1 触发 SQL 语法错误（statusCode=50000）
+    if start < 1:
+        return make_px_response({
+            "statusCode": 50000,
+            "message": "org.springframework.jdbc.BadSqlGrammarException: start 必须 >= 1",
+        })
+    msgs = mock_data.get_messages(parent_uid, child_uid, start, page_size)
     print(f"[NOTES] 匹配到 {len(msgs)} 条")
     return make_px_response({"statusCode": 200, "result": msgs})
 
