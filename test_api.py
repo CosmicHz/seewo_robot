@@ -10,7 +10,7 @@ import requests
 from init import config
 
 API_KEY = config.get("api_key", "your-secret-key")
-BASE_URL = f"http://127.0.0.1:{config.get('api_port', 5000)}"
+BASE_URL = f"http://127.0.0.1:{config.get('api_port', 5001)}"
 HEADERS = {"X-API-Key": API_KEY, "Content-Type": "application/json"}
 
 
