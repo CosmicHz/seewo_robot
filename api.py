@@ -1,7 +1,7 @@
 import json
 import logging
 from init import verify, config
-import requests
+import request_manager
 from login import acc
 from funcs import pxdecode
 
@@ -37,11 +37,10 @@ class api:
         url = f"{base}/class/apis.json?action=" + type
         encode_data = {"action": type, "params": params}
         logger.debug("POST %s action=%s", url, type)
-        resp = requests.post(
+        resp = request_manager.post(
             url,
             headers=account.mheaders,
             data=json.dumps(encode_data),
-            verify=verify,
         )
         # 尝试解密响应体再输出
         resp_json = json.loads(resp.text)

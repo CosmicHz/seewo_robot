@@ -108,9 +108,11 @@ def reconnect():
 def main():
     # 加载历史聊天记录
     history = load_chat_history()
-    msg_id = history.get("last_id", 0)
-    earliest_id = history.get("earliest_id", 0)
-    total_msgs = len(history.get("messages", []))
+    _messages = history.get("messages", [])
+    # earliest_id / last_id 从 messages 推断，不读文件残留字段
+    msg_id = max(m["id"] for m in _messages) if _messages else 0
+    earliest_id = min(m["id"] for m in _messages) if _messages else 0
+    total_msgs = len(_messages)
 
     print(
         f"已加载聊天记录，最后消息ID: {msg_id}，最早消息ID: {earliest_id}，共 {total_msgs} 条"
@@ -131,8 +133,9 @@ def main():
                 append_message(mid, content, str(msg_type), sender)
             history = load_chat_history()
             print(f"获取完成，共 {len(history.get('messages', []))} 条")
-            msg_id = history.get("last_id", 0)
-            earliest_id = history.get("earliest_id", 0)
+            _messages = history.get("messages", [])
+            msg_id = max(m["id"] for m in _messages) if _messages else 0
+            earliest_id = min(m["id"] for m in _messages) if _messages else 0
         except Exception as err:
             logw(f"[ERROR] 获取历史消息失败: {err}")
 

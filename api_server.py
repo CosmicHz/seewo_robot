@@ -18,10 +18,11 @@ os.chdir(os.path.dirname(__file__))
 
 from init import qrcode_file, config  # noqa: E402
 from login import acc, download_qrcode, check_qrcode  # noqa: E402
-from funcs import write_file, load_chat_history, merge_messages, update_earliest_id  # noqa: E402
+from funcs import write_file  # noqa: E402
 from stu import stu  # noqa: E402
 from msg import msg  # noqa: E402
 from upload import Upload  # noqa: E402
+from message_service import MessageDataSource  # noqa: E402
 
 app = Flask(__name__)
 
@@ -50,7 +51,7 @@ def log_response(response):
 
 
 API_KEY = config.get("api_key", "your-secret-key")
-API_PORT = config.get("api_port", 5000)
+API_PORT = config.get("api_port", 5001)
 API_HOST = config.get("api_host", "0.0.0.0")
 
 # 长消息处理策略：truncate=截断为199字(默认) / split=拆分多条发送
@@ -147,6 +148,10 @@ class Session:
 
 
 session = Session()
+
+# 消息数据源层：独占 chat_history.json 读写 + 格式化 + 内存缓存
+# __init__ 仅 _refresh（读文件 mtime，不碰 session），handler 调用时 session 已 init
+datasource = MessageDataSource(session)
 
 # 登录状态
 _login_state = {
@@ -291,67 +296,22 @@ def get_messages():
         return err
     try:
         count = int(request.args.get("count", 10))
-        result = session.stu_msg.get(count)
-        raw_messages = result.get("result", [])
-
-        # 格式化消息数据
-        messages = []
-        parent_uid = session.account.uid
-        student_uid = session.student.userUid
-
-        for msg in raw_messages:
-            # 解析时间
-            create_time = msg.get("createTime", 0)
-            if create_time:
-                from datetime import datetime
-
-                time_str = datetime.fromtimestamp(create_time / 1000).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-            else:
-                time_str = ""
-
-            # 判断发送者
-            sender_uid = msg.get("senderUid", "")
-            if sender_uid == parent_uid:
-                sender = "parent"
-                sender_name = "家长"
-            elif sender_uid == student_uid:
-                sender = "student"
-                sender_name = session.student.name
-            else:
-                sender = "unknown"
-                sender_name = msg.get("senderName", "未知")
-
-            messages.append(
-                {
-                    "id": msg.get("id", 0),
-                    "time": time_str,
-                    "content": msg.get("content", ""),
-                    "type": msg.get("type", 1),
-                    "sender": sender,
-                    "senderName": sender_name,
-                    "resUrl": msg.get("resUrl", ""),
-                }
-            )
-
-        # 按 ID 排序，确保顺序稳定为旧→新，不依赖服务器返回的原始顺序
-        messages.sort(key=lambda m: m["id"])
-        logger.info("/api/messages count=%d", len(messages))
-        if messages:
+        result = datasource.fetch_latest(count)
+        logger.info("/api/messages count=%d", result["count"])
+        if result["messages"]:
             logger.info(
                 "  最早: id=%s, sender=%s, senderName=%s",
-                messages[0].get("id"),
-                messages[0].get("sender"),
-                messages[0].get("senderName"),
+                result["messages"][0].get("id"),
+                result["messages"][0].get("sender"),
+                result["messages"][0].get("senderName"),
             )
             logger.info(
                 "  最新: id=%s, sender=%s, senderName=%s",
-                messages[-1].get("id"),
-                messages[-1].get("sender"),
-                messages[-1].get("senderName"),
+                result["messages"][-1].get("id"),
+                result["messages"][-1].get("sender"),
+                result["messages"][-1].get("senderName"),
             )
-        return jsonify({"status": "ok", "count": len(messages), "messages": messages})
+        return jsonify(result)
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -510,63 +470,26 @@ def get_history():
     try:
         limit = int(request.args.get("limit", 50))
         offset = int(request.args.get("offset", 0))
-
-        history = load_chat_history()
-        raw_messages = history.get("messages", [])
-
-        # 按 ID 排序，确保顺序稳定为旧→新（本地文件可能是历史遗留的倒序）
-        raw_messages = sorted(raw_messages, key=lambda m: m.get("id", 0))
-
-        # 分页
-        total = len(raw_messages)
-        raw_messages = raw_messages[offset : offset + limit]
-
-        # 补充 senderName（本地记录可能没有）
-        parent_uid = session.account.uid if session else ""
-        student_uid = session.student.userUid if session else ""
-        student_name = session.student.name if session else ""
-        messages = []
-        for m in raw_messages:
-            msg = dict(m)
-            sender = msg.get("sender", "unknown")
-            if not msg.get("senderName"):
-                if sender == "parent":
-                    msg["senderName"] = "家长"
-                elif sender == "student":
-                    msg["senderName"] = student_name
-                else:
-                    msg["senderName"] = "未知"
-            messages.append(msg)
-
-        result = {
-            "status": "ok",
-            "total": total,
-            "earliest_id": history.get("earliest_id", 0),
-            "last_id": history.get("last_id", 0),
-            "count": len(messages),
-            "messages": messages,
-        }
+        result = datasource.load_local(offset, limit)
         logger.info(
-            "/api/history total=%d, earliest_id=%s, last_id=%s, count=%d",
-            total,
-            result["earliest_id"],
-            result["last_id"],
-            len(messages),
+            "/api/history total=%d, count=%d",
+            result["total"],
+            result["count"],
         )
-        if messages:
+        if result["messages"]:
             logger.debug(
                 "  首条: id=%s, sender=%s, senderName=%s, content=%.50s",
-                messages[0].get("id"),
-                messages[0].get("sender"),
-                messages[0].get("senderName"),
-                messages[0].get("content", ""),
+                result["messages"][0].get("id"),
+                result["messages"][0].get("sender"),
+                result["messages"][0].get("senderName"),
+                result["messages"][0].get("content", ""),
             )
             logger.debug(
                 "  末条: id=%s, sender=%s, senderName=%s, content=%.50s",
-                messages[-1].get("id"),
-                messages[-1].get("sender"),
-                messages[-1].get("senderName"),
-                messages[-1].get("content", ""),
+                result["messages"][-1].get("id"),
+                result["messages"][-1].get("sender"),
+                result["messages"][-1].get("senderName"),
+                result["messages"][-1].get("content", ""),
             )
         return jsonify(result)
     except Exception as e:
@@ -576,130 +499,57 @@ def get_history():
 @app.route("/api/load_earlier", methods=["GET"])
 @require_api_key
 def load_earlier_messages():
-    """加载更早的消息（滚动加载历史）
+    """加载更早的消息（滚动加载历史，纯本地读）
 
     Query params:
         count: 获取数量，默认50
+        before_id: 客户端当前最早消息 id（游标），返回早于它的最新 count 条；
+                   未传时默认 max(local)+1（返回本地最新的 count 条）
     """
     err = _check_session()
     if err:
         return err
     try:
         count = int(request.args.get("count", 50))
-
-        history = load_chat_history()
-        earliest_id = history.get("earliest_id", 0)
-        existing_ids = {int(m.get("id", 0)) for m in history.get("messages", [])}
-
-        # 如果没有 earliest_id，先获取当前消息作为起点，并保存到本地
-        latest_msgs = []
-        if earliest_id == 0:
-            latest_msgs = session.stu_msg.get(count).get("result", [])
-            if not latest_msgs:
-                return jsonify(
-                    {
-                        "status": "ok",
-                        "message": "暂无消息",
-                        "has_more": False,
-                        "count": 0,
-                        "messages": [],
-                    }
-                )
-            earliest_id = min(int(m.get("id", 0)) for m in latest_msgs)
-
-        # 获取更早的消息
-        earlier_msgs = session.stu_msg.get_earlier_messages(earliest_id, count)
-
-        # 合并，去重
-        msgs_to_format = earlier_msgs + latest_msgs
-        msgs_to_format = [m for m in msgs_to_format if int(m.get("id", 0)) not in existing_ids]
-
-        # 如果本地没有记录且没有更早消息，把最新消息也返回
-        if not msgs_to_format:
+        # before_id 优先取客户端传入的游标；未传则用 max(local)+1 兜底
+        datasource._refresh()
+        local = datasource._messages
+        before_id = int(request.args.get("before_id", 0))
+        if before_id <= 0:
+            before_id = (
+                max(int(m.get("id", 0)) for m in local) + 1 if local else 0
+            )
+        if before_id <= 0 or not local:
             return jsonify(
                 {
                     "status": "ok",
-                    "message": "已到达最早消息",
+                    "message": "暂无消息",
                     "has_more": False,
                     "count": 0,
                     "messages": [],
                 }
             )
-
-        # 格式化并保存到本地
-        parent_uid = session.account.uid
-        student_uid = session.student.userUid
-        formatted_msgs = []
-
-        for msg in msgs_to_format:
-            # 解析时间
-            create_time = msg.get("createTime", 0)
-            if create_time:
-                from datetime import datetime
-
-                time_str = datetime.fromtimestamp(create_time / 1000).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-            else:
-                time_str = ""
-
-            # 判断发送者
-            sender_uid = msg.get("senderUid", "")
-            if sender_uid == parent_uid:
-                sender = "parent"
-                sender_name = "家长"
-            elif sender_uid == student_uid:
-                sender = "student"
-                sender_name = session.student.name
-            else:
-                sender = "unknown"
-                sender_name = msg.get("senderName", "未知")
-
-            formatted_msg = {
-                "id": int(msg.get("id", 0)),
-                "time": time_str,
-                "content": msg.get("content", ""),
-                "type": msg.get("type", 1),
-                "sender": sender,
-                "senderName": sender_name,
-                "resUrl": msg.get("resUrl", ""),
-            }
-            formatted_msgs.append(formatted_msg)
-
-        # 与本地历史合并（merge_messages 内部会排序消息）
-        merge_messages(formatted_msgs)
-
-        # 判断是否还有更早的消息
-        has_more = len(earlier_msgs) >= count
-
+        result = datasource.load_earlier_from_local(before_id, count)
         logger.info(
-            "/api/load_earlier earliest_id=%s, count=%d, has_more=%s",
-            earliest_id,
-            len(formatted_msgs),
-            has_more,
+            "/api/load_earlier before_id=%s, count=%d, has_more=%s",
+            before_id,
+            result["count"],
+            result["has_more"],
         )
-        if formatted_msgs:
+        if result["messages"]:
             logger.info(
                 "  首条: id=%s, sender=%s, senderName=%s",
-                formatted_msgs[0].get("id"),
-                formatted_msgs[0].get("sender"),
-                formatted_msgs[0].get("senderName"),
+                result["messages"][0].get("id"),
+                result["messages"][0].get("sender"),
+                result["messages"][0].get("senderName"),
             )
             logger.info(
                 "  末条: id=%s, sender=%s, senderName=%s",
-                formatted_msgs[-1].get("id"),
-                formatted_msgs[-1].get("sender"),
-                formatted_msgs[-1].get("senderName"),
+                result["messages"][-1].get("id"),
+                result["messages"][-1].get("sender"),
+                result["messages"][-1].get("senderName"),
             )
-
-        return jsonify(
-            {
-                "status": "ok",
-                "has_more": has_more,
-                "count": len(formatted_msgs),
-                "messages": formatted_msgs,
-            }
-        )
+        return jsonify(result)
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -707,7 +557,7 @@ def load_earlier_messages():
 @app.route("/api/sync_all", methods=["POST"])
 @require_api_key
 def sync_all_messages():
-    """全量同步所有历史消息（后台执行，耗时较长）
+    """全量同步所有历史消息
 
     JSON body:
         batch_size: 每次获取数量，默认50
@@ -720,88 +570,13 @@ def sync_all_messages():
         data = request.get_json() or {}
         batch_size = data.get("batch_size", 50)
         delay = data.get("delay", 2.0)
-
-        history = load_chat_history()
-        earliest_id = history.get("earliest_id", 0)
-        existing_ids = {int(m.get("id", 0)) for m in history.get("messages", [])}
-
-        # 始终获取最新消息
-        latest_msgs = session.stu_msg.get(100).get("result", [])
-
-        # 确定最早的已知消息ID
-        if earliest_id == 0 and latest_msgs:
-            earliest_id = min(int(m.get("id", 0)) for m in latest_msgs)
-
-        # 获取所有历史消息（比 earliest_id 更早的）
-        earlier_msgs = []
-        if earliest_id > 0:
-            earlier_msgs = session.stu_msg.get_all_messages_until_earliest(
-                earliest_id, batch_size, delay
-            )
-
-        # 合并：更早的消息 + 最新消息，去重（排除本地已有的）
-        all_msgs = earlier_msgs + latest_msgs
-        all_msgs = [m for m in all_msgs if int(m.get("id", 0)) not in existing_ids]
-
-        # 格式化并保存
-        parent_uid = session.account.uid
-        student_uid = session.student.userUid
-        formatted_msgs = []
-
-        for msg in all_msgs:
-            create_time = msg.get("createTime", 0)
-            if create_time:
-                from datetime import datetime
-
-                time_str = datetime.fromtimestamp(create_time / 1000).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-            else:
-                time_str = ""
-
-            sender_uid = msg.get("senderUid", "")
-            if sender_uid == parent_uid:
-                sender = "parent"
-                sender_name = "家长"
-            elif sender_uid == student_uid:
-                sender = "student"
-                sender_name = session.student.name
-            else:
-                sender = "unknown"
-                sender_name = msg.get("senderName", "未知")
-
-            formatted_msg = {
-                "id": int(msg.get("id", 0)),
-                "time": time_str,
-                "content": msg.get("content", ""),
-                "type": msg.get("type", 1),
-                "sender": sender,
-                "senderName": sender_name,
-                "resUrl": msg.get("resUrl", ""),
-            }
-            formatted_msgs.append(formatted_msg)
-
-        # 与本地历史合并（merge_messages 内部会排序消息）
-        merge_messages(formatted_msgs)
-
-        # 更新 earliest_id
-        if formatted_msgs:
-            update_earliest_id(min(m["id"] for m in formatted_msgs))
-
-        total_count = len(load_chat_history().get("messages", []))
+        result = datasource.sync_all(batch_size, delay)
         logger.info(
             "/api/sync_all synced_count=%d, total_count=%d",
-            len(formatted_msgs),
-            total_count,
+            result["synced_count"],
+            result["total_count"],
         )
-        return jsonify(
-            {
-                "status": "ok",
-                "message": "全量同步完成",
-                "synced_count": len(formatted_msgs),
-                "total_count": total_count,
-            }
-        )
+        return jsonify(result)
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 

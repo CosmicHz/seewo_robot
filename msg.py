@@ -1,5 +1,6 @@
 import requests
 import json
+import warnings
 from funcs import pxdecode
 from login import acc
 from init import urls, proxies
@@ -13,7 +14,12 @@ class msg:
         self.stu = student
 
     def get_last(self):
+        """
+        **极不完善，请勿使用**
+        不知道是什么东西
+        """
         # TODO: 异常处理
+        warnings.warn("该方法极不完善，请勿使用", DeprecationWarning, stacklevel=2)
         re = requests.get(
             urls().get_last_msg + self.acc.uid,
             headers=self.acc.headers,
@@ -28,11 +34,22 @@ class msg:
             return "[INFO] 消息为空"
         return msg_o[0]["lastMsgTips"]
 
-    def get(self, count: int):
+    def get(self, count: int, start: int = 1):
+        """获取留言列表（按 start 分页）
+
+        生产实测：start 是 1-based 页码，start=1=最新一页，递增往更旧翻页；
+        每页 count 条，页内按 id 升序（旧→新），页间无重叠。
+
+        Args:
+            count: 每页数量
+            start: 页码，默认 1=最新一页
+
+        Returns:
+            dict: 响应数据（含 result 字段）
+        """
         data = {
-            "page": 1,
+            "start": start,
             "pageSize": count,
-            "start": 1,
             "parentUid": self.acc.uid,
             "childUid": self.stu.userUid,
         }
@@ -45,6 +62,11 @@ class msg:
         )
 
     def get_content(self, count: int):
+        """
+        **极不完善，请勿使用**
+        获取最新消息内容
+        """
+        warnings.warn("该方法极不完善，请勿使用", DeprecationWarning, stacklevel=2)
         return self.get(count)["result"][0]["content"]
 
     def send(self, content: str, type: int, resUrl="", voiceLength=0, resConfig=""):
@@ -107,66 +129,10 @@ class msg:
         return result[index]["content"]
 
     def get_msg_detail(self, count: int, index: int) -> dict:
-        """获取第index条消息的完整信息（0=最旧，按ID升序）"""
+        """获取指定序号消息的完整信息（0=最旧，按ID升序）"""
         result = self.get(count)["result"]
         result = sorted(result, key=lambda m: m.get("id", 0))
         return result[index]
-
-    def get_earlier_messages(self, before_id: int, count: int = 50) -> list[dict]:
-        """获取指定ID之前的更早消息（用于滚动加载历史）
-
-        Args:
-            before_id: 获取此ID之前的消息
-            count: 获取数量
-
-        Returns:
-            消息列表，按时间正序排列（旧→新），内部按ID排序，不依赖服务器返回顺序
-        """
-        # 获取足够多的消息，然后筛选
-        result = self.get(count * 2).get("result", [])
-        # 筛选 ID < before_id 的消息
-        earlier = [m for m in result if int(m.get("id", 0)) < before_id]
-        # 按 ID 排序确保旧→新，不依赖服务器返回顺序
-        earlier = sorted(earlier, key=lambda m: m.get("id", 0))
-        return earlier[:count]
-
-    def get_all_messages_until_earliest(
-        self, start_id: int, batch_size: int = 50, delay: float = 2.0
-    ) -> list[dict]:
-        """获取从start_id开始的所有历史消息直到最早（用于全量同步）
-
-        Args:
-            start_id: 开始获取的消息ID
-            batch_size: 每次获取数量
-            delay: 每次请求间隔（防风控）
-
-        Returns:
-            所有消息列表，按时间正序排列（旧→新）
-        """
-        all_messages = []
-        current_id = start_id
-
-        while True:
-            # 获取更早的消息
-            earlier = self.get_earlier_messages(current_id, batch_size)
-            if not earlier:
-                break  # 已经是最早的消息
-
-            all_messages.extend(earlier)
-            # 更新current_id为获取到的最早消息ID
-            current_id = int(earlier[0].get("id", current_id))
-
-            # 如果获取的数量少于batch_size，说明已经到最早
-            if len(earlier) < batch_size:
-                break
-
-            # 等待一段时间（防风控）
-            import time
-
-            time.sleep(delay)
-
-        # 多批拼接后整体顺序不保证，统一按 ID 排序
-        return sorted(all_messages, key=lambda m: m.get("id", 0))
 
     def delete(self, count: int):
         id = self.get_id(count)

@@ -16,7 +16,7 @@ from textual.reactive import reactive
 from init import config
 
 API_KEY = config.get("api_key", "your-secret-key")
-API_URL = f"http://localhost:{config.get('api_port', 5000)}"
+API_URL = f"http://localhost:{config.get('api_port', 5001)}"
 
 
 class CheckMark(Checkbox):
@@ -95,29 +95,33 @@ class SeewoTUI(App):
     }
 
     .message-list {
-        height: 65%;
+        height: 1fr;
         overflow-y: scroll;
         border: solid $primary;
         padding: 1;
     }
 
     .input-area {
-        height: 10%;
+        height: auto;
         layout: horizontal;
+        align: center middle;
         border: solid $secondary;
+        padding: 0 1;
     }
 
     .button-area {
-        height: 10%;
+        height: auto;
         layout: horizontal;
         align: center middle;
+        padding: 0 1;
     }
 
     .status-bar {
-        height: 5%;
+        height: auto;
         content-align: center middle;
         background: $primary;
         color: $text;
+        padding: 0 1;
     }
 
     /* 家长消息靠右 */
@@ -139,12 +143,24 @@ class SeewoTUI(App):
     }
 
     Input {
-        width: 80%;
+        width: 1fr;
+        margin: 0 1;
+        padding: 0 1;
     }
 
     Button {
-        width: 15%;
-        margin: 1;
+        width: auto;
+        min-width: 6;
+        margin: 0 1;
+        padding: 0 2;
+        text-align: center;
+    }
+
+    CheckMark {
+        width: auto;
+        margin: 0 1;
+        padding: 0 1;
+        text-align: center;
     }
 
     .sync-btn {
@@ -342,10 +358,13 @@ class SeewoTUI(App):
             if resp.status_code == 200:
                 data = resp.json()
                 self.messages = data.get("messages", [])
-                earliest = data.get("earliest_id", 0)
-                self.has_more = (
-                    int(earliest) > 0 if earliest else False
+                # earliest_id 从 messages 推断（响应体不再返回此字段）
+                earliest = (
+                    min(m["id"] for m in self.messages)
+                    if self.messages
+                    else 0
                 )
+                self.has_more = int(earliest) > 0
                 self.render_messages()
         except Exception as e:
             self.query_one("#message-list").mount(Static(f"加载失败: {e}"))
@@ -359,11 +378,15 @@ class SeewoTUI(App):
         try:
             import requests
 
+            # 游标=当前最早消息 id，服务端据此从本地缓存读更早的一页
+            earliest = (
+                min(m["id"] for m in self.messages) if self.messages else 0
+            )
             loop = asyncio.get_event_loop()
             resp = await loop.run_in_executor(
                 None,
                 lambda: requests.get(
-                    f"{API_URL}/api/load_earlier?count=50",
+                    f"{API_URL}/api/load_earlier?count=50&before_id={earliest}",
                     headers={"X-API-Key": API_KEY},
                     timeout=10,
                 ),
@@ -397,7 +420,7 @@ class SeewoTUI(App):
                 lambda: requests.post(
                     f"{API_URL}/api/sync_all",
                     headers={"X-API-Key": API_KEY},
-                    json={"batch_size": 50, "delay": 2.0},
+                    json={"batch_size": 100, "delay": 2.0},
                     timeout=300,
                 ),
             )
