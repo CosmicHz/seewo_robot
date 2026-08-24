@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# pre-commit: 当 pyproject.toml 或 uv.lock 被暂存时，自动重新导出 requirements.txt
-# 并将其加入本次 commit，保证 requirements.txt 与 uv.lock 永不脱节。
+# pre-commit: pyproject.toml / uv.lock 变更时，自动重新导出 requirements.txt 并 stage，
+# 保证 requirements.txt 与 uv.lock 永不脱节。
 #
 # 激活方式（一次性）：
 #   git config core.hooksPath scripts/hooks
@@ -10,8 +10,10 @@
 
 set -e
 
-# 只在 pyproject.toml 或 uv.lock 处于暂存区时触发
-if ! git diff --cached --name-only | grep -qE '^(pyproject\.toml|uv\.lock)$'; then
+staged="$(git diff --cached --name-only)"
+
+# 依赖变更时才重导出 requirements.txt；否则直接结束
+if ! printf '%s\n' "$staged" | grep -qE '^(pyproject\.toml|uv\.lock)$'; then
     exit 0
 fi
 
@@ -27,7 +29,7 @@ echo "[pre-commit] 检测到依赖文件变更，同步 requirements.txt ..."
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
-uv export --format requirements-txt --no-hashes --output-file "$tmp" >/dev/null
+uv export --format requirements-txt --no-hashes --no-header --output-file "$tmp" >/dev/null
 
 if [ -f requirements.txt ] && diff -q requirements.txt "$tmp" >/dev/null 2>&1; then
     echo "[pre-commit] requirements.txt 已是最新，无需更新"

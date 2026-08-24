@@ -19,6 +19,7 @@ def main() -> int:
         "uv", "export",
         "--format", "requirements-txt",
         "--no-hashes",
+        "--no-header",
         "--output-file", OUTPUT_FILE,
     ]
     print("同步依赖到", OUTPUT_FILE)
