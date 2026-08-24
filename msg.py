@@ -6,6 +6,7 @@ from login import acc
 from init import urls, proxies
 from stu import stu
 from api import api
+from models import MessageResponse, RawMessage
 
 
 class msg:
@@ -34,7 +35,7 @@ class msg:
             return "[INFO] 消息为空"
         return msg_o[0]["lastMsgTips"]
 
-    def get(self, count: int, start: int = 1):
+    def get(self, count: int, start: int = 1) -> MessageResponse:
         """获取留言列表（按 start 分页）
 
         生产实测：start 是 1-based 页码，start=1=最新一页，递增往更旧翻页；
@@ -45,7 +46,7 @@ class msg:
             start: 页码，默认 1=最新一页
 
         Returns:
-            dict: 响应数据（含 result 字段）
+            MessageResponse: 响应包装（含 result 消息列表 list[RawMessage]）
         """
         data = {
             "start": start,
@@ -53,13 +54,14 @@ class msg:
             "parentUid": self.acc.uid,
             "childUid": self.stu.userUid,
         }
-        return json.loads(
+        decoded = json.loads(
             pxdecode(
                 api().action(
                     "GET_KIDNOTE_V1_BYPARENTUID_BYCHILDUID_NOTES", data, self.acc
                 )
             )
         )
+        return MessageResponse.from_dict(decoded)
 
     def get_content(self, count: int):
         """
@@ -67,7 +69,8 @@ class msg:
         获取最新消息内容
         """
         warnings.warn("该方法极不完善，请勿使用", DeprecationWarning, stacklevel=2)
-        return self.get(count)["result"][0]["content"]
+        result = self.get(count).result
+        return result[0].content if result else ""
 
     def send(self, content: str, type: int, resUrl="", voiceLength=0, resConfig=""):
         data = {
@@ -108,30 +111,28 @@ class msg:
             return False
 
     def get_id(self, count: int) -> int:
-        result = self.get(count)["result"]
+        result = self.get(count).result
         if not result:
             return 0
-        return result[0]["id"]
+        return result[0].id
 
     def get_all_ids(self, count: int) -> list[int]:
         """获取多条消息的ID列表，按时间正序排列（旧→新）
 
         内部按 ID 排序，不依赖服务器返回的原始顺序。
         """
-        result = self.get(count).get("result", [])
-        ids = [m["id"] for m in result]
+        result = self.get(count).result
+        ids = [m.id for m in result]
         return sorted(ids)
 
     def get_content_by_index(self, count: int, index: int) -> str:
         """获取第index条消息的内容（0=最旧，按ID升序）"""
-        result = self.get(count)["result"]
-        result = sorted(result, key=lambda m: m.get("id", 0))
-        return result[index]["content"]
+        result = sorted(self.get(count).result, key=lambda m: m.id)
+        return result[index].content
 
-    def get_msg_detail(self, count: int, index: int) -> dict:
+    def get_msg_detail(self, count: int, index: int) -> RawMessage:
         """获取指定序号消息的完整信息（0=最旧，按ID升序）"""
-        result = self.get(count)["result"]
-        result = sorted(result, key=lambda m: m.get("id", 0))
+        result = sorted(self.get(count).result, key=lambda m: m.id)
         return result[index]
 
     def delete(self, count: int):

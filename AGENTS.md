@@ -83,6 +83,9 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 统一请求层 (request_manager.py)      ← 节流 + 429 退避 + 队列化预留
    │
    ▼
+数据模型层 (models.py)                ← 进程内 dataclass 模型（RawMessage / Message / MessageResponse）
+   │
+   ▼
 基础设施 (init.py / login.py / funcs.py)  ← 配置、登录、文件读写工具
 ```
 
@@ -90,13 +93,14 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 
 - **[request_manager.py](request_manager.py)**：所有对希沃的 HTTP 请求**必须**经此调度。当前实现 `_throttle()` 全局节流（`MIN_INTERVAL=0.5s`，`threading.Lock` 串行化节流点）+ HTTP 429 指数退避重试（3 次）。预留队列化接口（`queue.Queue + worker`，当前同步执行）。**新增任何对希沃的 `requests.post` 都必须改用 `request_manager.post`**。
 - **[api.py](api.py)**：m-campus API 调用网关。`api().action(type, params, account)` 把 pxencode 后的参数 POST 到 `/class/apis.json?action=<type>`，返回响应 JSON。内部已用 `request_manager.post`。
-- **[msg.py](msg.py)**：纯 DAO。只做单次请求，**不再有**多页聚合逻辑。`get(count, start=1)` 是核心方法，`start` 是 1-based 页码（start=1=最新一页，递增往更旧翻页，页内按 id 升序，页间无重叠）。`get_last` / `get_content` 标记 `极不完善，请勿使用`。
-- **[message_service.py](message_service.py)**：消息数据源层。`MessageDataSource` 独占 `chat_history.json` 读写、消息格式化、内存缓存（基于文件 mtime 感知 `main.py` 等外部写入）。`sync_all` 翻页循环在本层。
+- **[msg.py](msg.py)**：纯 DAO。只做单次请求，**不再有**多页聚合逻辑。`get(count, start=1) -> MessageResponse` 是核心方法，`start` 是 1-based 页码（start=1=最新一页，递增往更旧翻页，页内按 id 升序，页间无重叠）；调用方通过 `.result` 取 `list[RawMessage]`。
+- **[message_service.py](message_service.py)**：消息数据源层。`MessageDataSource` 独占 `chat_history.json` 读写、消息格式化、内存缓存（基于文件 mtime 感知 `main.py` 等外部写入）。`_format_msg(raw: RawMessage) -> Message`；`_messages: list[Message]`；对外方法返回 dict（边界 `dataclasses.asdict` 转 dict 给 jsonify）。`sync_all` 翻页循环在本层。
+- **[models.py](models.py)**：数据模型层。进程内数据传输用 dataclass，跨进程边界（Flask jsonify / 写 chat_history.json / pxencode 网络请求）调 `dataclasses.asdict()` 转换。详见 [数据模型层（models.py）](#数据模型层modelspy)。
 - **[api_server.py](api_server.py)**：入口层，handler 薄层化。全局 `session = Session()` + 全局 `datasource = MessageDataSource(session)`（构造时仅 `_refresh` 读 mtime，不碰 session）。
 - **[init.py](init.py)**：全局配置 `config`、文件路径、`_use_mock`、公共请求头 `headers_nocookie`、希沃 URL 集合 `urls`。
 - **[login.py](login.py)**：`acc` 账户对象 + `download_qrcode` / `check_qrcode` / `login` 流程。`acc(auto_login=True/False)` 控制过期时是否自动触发扫码：`main.py` 用 True，`api_server.py` 用 False。
-- **[stu.py](stu.py)**：学生信息 DAO，默认 `count=0` 取列表第一个学生（[main.py:9](main.py#L9) 留有 `TODO: 多学生选择`）。
-- **[funcs.py](funcs.py)**：工具函数。`CHAT_LOG_FILE` 根据 `_use_mock` 切换 `chat_history_mock.json` / `chat_history.json`。`load_chat_history` / `append_message` / `merge_messages` 只维护 `messages` 字段，不再维护 `earliest_id` / `last_id`。
+- **[stu.py](stu.py)**：学生信息 DAO，默认 `count=0` 取列表第一个学生
+- **[funcs.py](funcs.py)**：工具函数。`CHAT_LOG_FILE` 根据 `_use_mock` 切换 `chat_history_mock.json` / `chat_history.json`。`load_chat_history() -> list[Message]`、`append_message` / `merge_messages(messages: list[Message])` 只维护 `messages` 字段，不维护 `earliest_id` / `last_id`。
 - **[upload.py](upload.py)**：文件上传到希沃云存储接口，返回 `downloadUrl`。
 - **[yunban.py](yunban.py)**：云班功能扩展（班级列表、考勤事件、签到等）。`getpass` 用于获取离线验证码，`getpass2` 依赖 pandas 剪贴板（**损坏**）。
 - **[qrcode.py](qrcode.py)**：终端二维码渲染（依赖 `numpy` + `pillow`）。
@@ -139,17 +143,33 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 - `msg.get` 返回的页内顺序**不**假设稳定，`message_service` 内部按 `id` 排序后再返回。
 - 客户端显示必须按返回顺序（旧在上、新在下）。
 
-### earliest_id / last_id（**重要**）
+### earliest_id / last_id
 
-- **不再作为文件字段维护**。`load_chat_history` 只返回 `{"messages": [...]}`，不推断 earliest_id / last_id。
 - 调用方（`main.py` / `api_server.py` / `tui_client.py`）**需要时自行从 messages 推断**：
 
   ```python
-  last_id = max(m["id"] for m in messages) if messages else 0      # 最新
-  earliest_id = min(m["id"] for m in messages) if messages else 0  # 最旧
+  last_id = max(m.id for m in messages) if messages else 0      # 最新
+  earliest_id = min(m.id for m in messages) if messages else 0  # 最旧
   ```
 
 - 服务器响应体**不包含** earliest_id / last_id 字段，客户端自行从 messages 推断。
+
+### 数据模型层（models.py）
+
+进程内数据传输使用 dataclass 模型，跨进程边界（Flask jsonify / 写 chat_history.json / pxencode 网络请求）调 `dataclasses.asdict()` 转 dict。只建模跨多模块频繁传输的核心数据，一次性构造+消费的 dict（DAO 请求参数、handler 响应体、upload/stu/yunban 内部响应）保留 dict 不建模。
+
+| 模型 | frozen | 用途 |
+| --- | --- | --- |
+| `RawMessage` | ✅ frozen+slots | 希沃原始消息（`msg.get().result` 列表元素），只读，字段缺失用默认值兜底（`senderType` 默认 `"unknown"`、`type` 默认 `1` 等，对齐原 `dict.get(key, default)` 行为） |
+| `Message` | ❌ 只 slots，**可变** | 格式化后消息（`chat_history.json` 存储 / `message_service._messages` 缓存）。可变是为方便 `load_local` 补 `senderName`（直接 `m.senderName = name`，不必 `replace`）。`type` 标注 `int | str`：保留 main.py 写`str(msg_type)` / message_service 写 int 的既有混合行为 |
+| `MessageResponse` | ✅ frozen+slots | `msg.get` 的响应包装（含 `result: list[RawMessage]`）。容器只读，但 `result` 是 list 自身可变 |
+
+**核心改造点**：
+
+- `funcs.load_chat_history() -> list[Message]`、`append_message` / `merge_messages` 内部构造 Message 实例
+- `msg.get(count, start) -> MessageResponse`、辅助方法 `get_id` / `get_all_ids` / `get_content_by_index` / `get_msg_detail` 用属性访问（`.result` / `m.id` / `m.content`）
+- `message_service._format_msg(raw: RawMessage) -> Message`、`_messages: list[Message]`、对外方法返回 dict（边界 `dataclasses.asdict(m)` 转 dict 给 jsonify）
+- `main.py` 字段访问从 `.get("x", default)` 改为 `.x`（运行时行为不变，AGENTS.md 硬约束已放宽至此）
 
 ### 长消息处理（仅 `/api/send`，路径 B 独有）
 
@@ -359,46 +379,21 @@ def xxx():
   失败时记 warning 并回退硬切，不影响服务启动。
   ```
 
-## 特别注意事项（必读）
-
-### 硬约束：永远不要改变 main.py 的行为
-
-> 任何改动、重构、bug 修复都不得影响 `main.py` 的运行逻辑与对外行为。
-> 涉及共享底层模块（`login` / `stu` / `msg` / `funcs` / `init`）的修改，必须保证 `main.py` 调用路径上的语义不变；只能新增或修改 `api_server` 路径专用的逻辑。
-
-具体含义：
-
-- `main.py` 的长消息处理走**硬编码 `[:196] + "..."`**，不读 `long_message_strategy` / `long_message_split_pattern`，**不可改变**
-- `main.py` 的 `earliest_id` / `last_id` 从 `messages` 推断（[main.py:113-114](main.py#L113-114)），**不可退回文件字段**
-- `main.py` 调 `msg.get()` 的语义不可变（`start` 是 1-based 页码）
-- 修改共享模块时，先确认 `main.py` 的调用路径不受影响
+## 特别注意事项
 
 ### 199 字截断是服务器约束的客户端镜像，不可移除
 
 > 希沃服务器对 `POST_KIDNOTE_V1_NOTE` 强制 200 字硬上限，超长返回 `statusCode=40000 / "留言内容不能超过200字符"`。`196 + "..." = 199` 是有意为之，留 1 字给省略号标记并保留 <200 的余量。**移除截断会导致 api_server 返回 40000 错误、main 路径消息静默丢失**。已于 2026-08-18 用 500 字消息实测确认。
 
-### 生产环境 SQL 注入风险评估（不重要）
-
-经实测确认生产环境有三层防护：
-
-1. **WAF**（阿里云）：布尔型 SQL payload（如 `1 OR 1=1`）会被 WAF 拦截返回 HTTP 405
-2. **应用层参数校验**：非数字 `start` 被 `int()` 转换失败拦截（`请求参数校验失败`）
-
-唯一问题：`start=0` 缺少边界检查会触发 SQL 错误（负 offset）。批量测试脚本留存在 [probe_kidnote_api.py](probe_kidnote_api.py)。
-
 ### 共享 tokens.json 的写冲突风险
 
 所有脚本共享 `tokens.json`：多次 QR 扫码会覆盖前一份 token。两条路径同时运行可能造成冲突，**避免同时运行多个需要登录的脚本**。
-
-### chat_history.json 的 mock 数据污染（已修复，但需警惕）
-
-历史问题：mock 模式下测试数据会污染真实 `chat_history.json`。**当前已通过** `funcs.py` 的 `CHAT_LOG_FILE` 切换实现隔离（mock → `chat_history_mock.json`）。任何新增的聊天记录读写代码**必须**用 `funcs` 暴露的 `CHAT_LOG_FILE`，不要硬编码文件名。
 
 ### 修改 MessageDataSource 的注意事项
 
 - `_refresh` 通过 mtime 感知外部写入（main.py 的 append_message）。**写操作后必须调 `_invalidate` 失效缓存**，否则下次 `_refresh` 不会重读。
 - `_persist` 已封装：格式化 + merge + invalidate + refresh。
-- 不要在 datasource 里直接调 `session.stu_msg.send`——这是数据源层，不是发送层。
+- 不要在 datasource 里直接调 `session.stu_msg.send`。这是数据源层，不是发送层。
 
 ## 已知问题
 

@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 
 import base64
+import dataclasses
 import json
 import time
 import os
 
 from init import _use_mock
+from models import Message
 
 filedate = time.strftime("%Y-%m-%d", time.localtime())
 
@@ -57,26 +59,32 @@ def logw(t: str) -> None:
 CHAT_LOG_FILE = "chat_history_mock.json" if _use_mock else "chat_history.json"
 
 
-def load_chat_history() -> dict[str, any]:
+def load_chat_history() -> list[Message]:
     """从文件加载聊天记录。
 
     Returns:
-        聊天记录数据，形式为`{'messages': list}`"""
+        消息列表（list[Message]，按文件中的顺序，不保证已排序）
+    """
     if os.path.exists(CHAT_LOG_FILE):
         try:
             data = load_json(CHAT_LOG_FILE)
             if not isinstance(data, dict) or "messages" not in data:
                 raise ValueError("invalid chat history")
-            return data
+            return [Message.from_dict(m) for m in data.get("messages", [])]
         except (json.JSONDecodeError, KeyError, ValueError):
             pass
-    return {"messages": []}
+    return []
 
 
-def overwrite_chat_history_file(history: dict[str, any]) -> None:
-    """保存聊天记录到文件"""
+def overwrite_chat_history_file(messages: list[Message]) -> None:
+    """保存聊天记录到文件（messages: list[Message]）"""
     with open(CHAT_LOG_FILE, "w", encoding="utf-8") as f:
-        json.dump(history, f, ensure_ascii=False, indent=2)
+        json.dump(
+            {"messages": [dataclasses.asdict(m) for m in messages]},
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
 
 
 def append_message(
@@ -86,39 +94,31 @@ def append_message(
 
     注意：消息会按ID排序，确保顺序正确（旧→新）
     """
-    history = load_chat_history()
-
-    # 添加新消息
-    new_msg = {
-        "id": msg_id,
-        "time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-        "content": content,
-        "type": msg_type,
-        "sender": sender,
-        "senderName": sender_name,
-    }
-    history["messages"].append(new_msg)
-
+    messages = load_chat_history()
+    messages.append(Message(
+        id=msg_id,
+        time=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+        content=content,
+        type=msg_type,
+        sender=sender,
+        senderName=sender_name,
+    ))
     # 按ID排序（旧→新）
-    history["messages"] = sorted(history["messages"], key=lambda m: m["id"])
+    messages.sort(key=lambda m: m.id)
+    overwrite_chat_history_file(messages)
 
-    overwrite_chat_history_file(history)
 
-
-def merge_messages(messages: list) -> None:
+def merge_messages(messages: list[Message]) -> None:
     """批量合并消息到聊天记录（用于加载更早的历史消息）
 
     合并后按 ID 排序，确保顺序为旧→新（与 append_message 行为一致），
     不假设传入 messages 的顺序，也不假设它们与本地已有消息的相对位置。
 
     Args:
-        messages: 待合并的消息列表，每条需含 "id" 字段
+        messages: 待合并的 Message 列表
     """
     if not messages:
         return
-    history = load_chat_history()
-    # 合并后按ID排序，确保顺序正确（旧→新）
-    history["messages"] = sorted(
-        messages + history["messages"], key=lambda m: m["id"]
-    )
-    overwrite_chat_history_file(history)
+    existing = load_chat_history()
+    merged = sorted(messages + existing, key=lambda m: m.id)
+    overwrite_chat_history_file(merged)

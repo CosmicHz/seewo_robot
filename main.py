@@ -107,11 +107,10 @@ def reconnect():
 
 def main():
     # 加载历史聊天记录
-    history = load_chat_history()
-    _messages = history.get("messages", [])
+    _messages = load_chat_history()
     # earliest_id / last_id 从 messages 推断，不读文件残留字段
-    msg_id = max(m["id"] for m in _messages) if _messages else 0
-    earliest_id = min(m["id"] for m in _messages) if _messages else 0
+    msg_id = max(m.id for m in _messages) if _messages else 0
+    earliest_id = min(m.id for m in _messages) if _messages else 0
     total_msgs = len(_messages)
 
     print(
@@ -123,19 +122,18 @@ def main():
         print("首次运行，正在获取最近100条消息...")
         try:
             # 直接获取 result，按时间倒序（新→旧）
-            result = stu_msg.get(100).get("result", [])
+            result = stu_msg.get(100).result
             # 按倒序处理（新→旧），第一条就是最新消息
             for msg in result:
-                mid = int(msg.get("id", 0))  # 确保 ID 是整数
-                content = msg.get("content", "")
-                msg_type = msg.get("type", 1)
-                sender = msg.get("senderType", "unknown")
+                mid = msg.id
+                content = msg.content
+                msg_type = msg.type
+                sender = msg.senderType  # RawMessage.senderType 默认 "unknown"
                 append_message(mid, content, str(msg_type), sender)
-            history = load_chat_history()
-            print(f"获取完成，共 {len(history.get('messages', []))} 条")
-            _messages = history.get("messages", [])
-            msg_id = max(m["id"] for m in _messages) if _messages else 0
-            earliest_id = min(m["id"] for m in _messages) if _messages else 0
+            _messages = load_chat_history()
+            print(f"获取完成，共 {len(_messages)} 条")
+            msg_id = max(m.id for m in _messages) if _messages else 0
+            earliest_id = min(m.id for m in _messages) if _messages else 0
         except Exception as err:
             logw(f"[ERROR] 获取历史消息失败: {err}")
 
@@ -148,7 +146,7 @@ def main():
 
         try:
             # 直接获取 result，按时间倒序（新→旧）
-            result = stu_msg.get(POLL_BATCH_SIZE).get("result", [])
+            result = stu_msg.get(POLL_BATCH_SIZE).result
             consecutive_errors = 0
         except Exception as err:
             consecutive_errors += 1
@@ -162,8 +160,8 @@ def main():
                     logw(f"[ERROR] 重连失败: {e}")
             continue
 
-        # 提取所有消息ID（倒序：新→旧），确保是整数
-        all_ids = [int(m.get("id", 0)) for m in result]
+        # 提取所有消息ID（倒序：新→旧）
+        all_ids = [m.id for m in result]
         # 筛选出未读的新消息ID
         new_ids = [mid for mid in all_ids if mid > msg_id]
 
@@ -181,13 +179,13 @@ def main():
         for mid in reversed(new_ids):
             try:
                 # 在 result 中找到对应的消息
-                msg = next((m for m in result if m.get("id") == mid), None)
+                msg = next((m for m in result if m.id == mid), None)
                 if not msg:
                     continue
-                last_msg = msg.get("content", "")
-                msg_type = msg.get("type", 1)
-                sender = msg.get("senderType", "unknown")
-                sender_name = msg.get("senderName", "")
+                last_msg = msg.content
+                msg_type = msg.type
+                sender = msg.senderType
+                sender_name = msg.senderName
                 msg_id = mid
 
                 # 保存到聊天记录
