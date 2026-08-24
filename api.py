@@ -1,6 +1,6 @@
 import json
 import logging
-from init import verify, config
+from init import config
 import request_manager
 from login import acc
 from funcs import pxdecode

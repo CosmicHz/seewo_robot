@@ -5,7 +5,6 @@
 - Message：格式化后消息（chat_history.json 存储），slots + 可变（load_local 补 senderName）
 - MessageResponse：msg.get 的响应包装，frozen + slots，容器只读但 result list 可变
 """
-import dataclasses
 from dataclasses import dataclass, field
 
 

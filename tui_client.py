@@ -5,7 +5,6 @@
 """
 
 import os
-import json
 import asyncio
 import base64
 from textual.app import App, ComposeResult

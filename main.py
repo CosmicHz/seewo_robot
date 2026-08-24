@@ -9,7 +9,6 @@
 # TODO: 多学生选择
 import os
 import time
-import json
 
 os.chdir(os.path.dirname(__file__))
 print("当前路径：" + os.getcwd())
