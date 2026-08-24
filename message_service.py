@@ -8,11 +8,14 @@ import os
 import time
 import dataclasses
 from datetime import datetime
-from typing import Any
+from functools import partial
+from operator import attrgetter
 from funcs import load_chat_history, merge_messages, CHAT_LOG_FILE
 from models import RawMessage, Message
+from sortedcontainers import SortedKeyList
 import request_manager
 
+_MessageSortedList = partial(SortedKeyList, key=attrgetter("id"))
 
 class MessageDataSource:
     """消息数据源层：独占 chat_history.json 读写 + 格式化 + 内存缓存。
@@ -23,7 +26,8 @@ class MessageDataSource:
 
     def __init__(self, session):
         self._session = session
-        self._messages: list[Message] = []
+        # SortedKeyList 按 m.id 升序维护：插入即有序
+        self._messages: SortedKeyList[Message] = _MessageSortedList()
         self._mtime = -1
         self._refresh()
 
@@ -32,11 +36,11 @@ class MessageDataSource:
         try:
             mtime = os.path.getmtime(CHAT_LOG_FILE)
         except OSError:
-            self._messages = []
+            self._messages = _MessageSortedList()
             self._mtime = -1
             return
         if mtime != self._mtime:
-            self._messages = load_chat_history()
+            self._messages = _MessageSortedList(load_chat_history())
             self._mtime = mtime
 
     def _invalidate(self):
@@ -93,9 +97,8 @@ class MessageDataSource:
         Message 可变，补 senderName 时直接 m.senderName = name 赋值。
         """
         self._refresh()
-        msgs = sorted(self._messages, key=lambda m: m.id)
-        total = len(msgs)
-        page = msgs[offset:offset + limit]
+        total = len(self._messages)
+        page = self._messages[offset:offset + limit]
         student_name = self._session.student.name if self._session.student else ""
         result = []
         for m in page:
@@ -112,9 +115,9 @@ class MessageDataSource:
         parent_uid = self._session.account.uid
         student_uid = self._session.student.userUid
         student_name = self._session.student.name
-        messages = [self._format_msg(m, parent_uid, student_uid, student_name)
-                    for m in raw]
-        messages.sort(key=lambda m: m.id)
+        messages = _MessageSortedList(
+            self._format_msg(m, parent_uid, student_uid, student_name) for m in raw
+        )
         return {"status": "ok", "count": len(messages),
                 "messages": [dataclasses.asdict(m) for m in messages]}
 
@@ -128,8 +131,10 @@ class MessageDataSource:
         保证分页连续无重叠/无间隙：客户端游标=其最早消息 id，每次取刚好更旧的一页。
         """
         self._refresh()
-        earlier = [m for m in self._messages if m.id < before_id]
-        earlier = sorted(earlier, key=lambda m: m.id)
+        # SortedKeyList 按 id 升序，bisect_key_left 定位 before_id 的左插入点，
+        # 之前的切片即为 id < before_id 的更早消息（已升序）
+        pos = self._messages.bisect_key_left(before_id)
+        earlier = self._messages[:pos]
         has_more = len(earlier) > count
         page = earlier[-count:] if earlier else []
         return {"status": "ok", "has_more": has_more, "count": len(page),
@@ -144,7 +149,7 @@ class MessageDataSource:
         """
         self._refresh()
         existing_ids = {m.id for m in self._messages}
-        earliest_id = min(m.id for m in self._messages) if self._messages else 0
+        earliest_id = self._messages[0].id if self._messages else 0
 
         latest = self._session.stu_msg.get(100).result
         if earliest_id == 0 and latest:
