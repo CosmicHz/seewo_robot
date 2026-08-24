@@ -451,7 +451,6 @@ seewo_robot/
 ├── qrcode.py            # [共享] 终端二维码渲染
 │
 ├── test/                # [测试] 测试脚本目录（test_api.py 等）
-├── sync_requirements.py # [工具] 从 pyproject.toml + uv.lock 生成 requirements.txt
 │
 ├── pyproject.toml       # [元] 项目元数据 + uv 依赖声明
 ├── uv.lock              # [元] uv 依赖锁定版本
