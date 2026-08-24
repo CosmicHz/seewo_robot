@@ -15,6 +15,7 @@ __pycache__/
 venv/
 .venv/
 *.env
+*.egg-info/
 
 # 临时/调试脚本
 debug.py

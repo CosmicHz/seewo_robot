@@ -5,7 +5,7 @@
 
 ## 这是什么？
 
-Seewo 班牌机器人是一个对接**希沃云班**（微信小程序 / 希沃魔方 APP）的聊天工具。它以**家长身份**登录希沃统一服务平台，实现与孩子班牌之间的「亲情留言」互动——收消息、发消息（文本 / 图片 / 音频）、甚至通过留言下发指令。
+Seewo 班牌机器人是一个对接**希沃云班**小程序的聊天工具。它以**家长身份**登录希沃统一服务平台，实现与孩子班牌之间的「亲情留言」互动——收消息、发消息（文本 / 图片 / 音频）、甚至通过留言下发指令。
 
 项目内置了**两种使用方式**（两条独立的运行路径），你可以根据场景选择：
 
@@ -47,6 +47,19 @@ uv sync
 # 或使用 pip
 pip install -r requirements.txt
 ```
+
+> [!IMPORTANT]
+> **依赖管理约定**
+>
+> - 项目依赖的**唯一来源**是 [`pyproject.toml`](pyproject.toml)，请在那里声明依赖。
+> - [`requirements.txt`](requirements.txt) 是**锁文件**（生成产物），**请勿手动修改**；它是给 `pip install -r requirements.txt` 用的兼容快照。
+> - 开发依赖（`pip-tools` / `ruff` / `pytest`）已 pin 版本声明在 `pyproject.toml` 的 `dev` 组。
+> - 修改 `pyproject.toml` / `uv.lock` 后，`pre-commit` 钩子在提交时自动用 `pip-compile` 重新生成并暂存 `requirements.txt`；**若本机未安装 `pip-tools`，提交会被阻止**（勿用 `--no-verify` 绕过，CI 会拦截不同步的锁文件）。
+> - 如需手动重新生成（确保 `pip-tools` 已安装；`PIP_CONFIG_FILE=/dev/null` 用于隔离本机镜像配置，避免个人 pip 源写进锁文件）：
+>
+>   ```bash
+>   PIP_CONFIG_FILE=/dev/null pip-compile --no-header --no-emit-index-url --strip-extras --output-file requirements.txt pyproject.toml
+>   ```
 
 核心依赖说明：
 
@@ -122,7 +135,6 @@ uv run upload_file.py ./照片.jpg
 
 关于这个脚本需要说明的几件事：
 
-- **不是只能传图片**：底层 `Upload.upload()` 支持任意 MIME type；`.m4a` 后缀会自动识别为 `audio/mp4`，其他扩展名虽然也能上传，但 CLI 入口默认 Content-Type 为 `image/png`（语义可能不准确）。
 - **上传完成后不会自动作为留言发送**：它只是把文件通过希沃的**云存储接口**推上去，然后在终端打印一个公网可访问的 `downloadUrl`。要把它作为图片/音频/视频留言发给孩子，还需要你自己用这个 `downloadUrl` 构造一次 `msg.py` 里的 `send(type=2/3/4, resUrl=...)` 调用，或者直接走路径 B 的 `/api/send_image` / `/api/send_audio`（它们内部一步完成上传 + 发送）。
 - 上传成功的完整返回（含 `downloadUrl`、`fileId` 等）会按文件名作为 key 写入 `uploads.json`，方便以后查 URL，不会被聊天链路自动引用。
 
@@ -452,9 +464,9 @@ seewo_robot/
 │
 ├── test/                # [测试] 测试脚本目录（test_api.py 等）
 │
-├── pyproject.toml       # [元] 项目元数据 + uv 依赖声明
+├── pyproject.toml       # [元] 项目元数据与依赖声明（仅在此声明依赖）
 ├── uv.lock              # [元] uv 依赖锁定版本
-├── requirements.txt     # [元] 兼容 pip 的依赖清单（自动生成）
+├── requirements.txt     # [元] 用做锁文件（生成产物，勿手改；pip install -r 用）
 ├── config.json.example  # [配置] 配置文件示例
 │
 ├── AGENTS.md            # 🤖 给 AI 助手的完整项目上下文 + 开发规范

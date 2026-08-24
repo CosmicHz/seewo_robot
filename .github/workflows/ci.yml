@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  lockfile-sync:
+    name: lockfile sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 从 pyproject.toml 的 dev 组一次性安装 dev 工具（pip-tools/ruff/pytest），
+      # 版本单一真源在 pyproject.toml，CI 不硬编码，保证与本地一致、可复现。
+      - name: Install project + dev tools
+        run: |
+          pip install -e ".[dev]"
+
+      # 用与 pre-commit 完全一致的命令重新生成，对比仓库内已提交的 requirements.txt。
+      # 若不一致则失败，拦截绕过本机 hook（--no-verify）提交的 PR。
+      # PIP_CONFIG_FILE=/dev/null 隔离本机镜像配置，确保锁文件仅由 pyproject.toml 决定。
+      - name: Verify requirements.txt is in sync
+        run: |
+          PIP_CONFIG_FILE=/dev/null pip-compile --no-header --no-emit-index-url --strip-extras --output-file /tmp/requirements.lock pyproject.toml
+          diff -u requirements.txt /tmp/requirements.lock \
+            || { echo "::error::requirements.txt 与 pyproject.toml 不同步：请在本机提交前运行 pre-commit（pip-compile）重新生成"; exit 1; }

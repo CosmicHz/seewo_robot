@@ -32,6 +32,14 @@ uv run python test/test_api.py    # 逐个测试所有 API 端点
 
 **Windows 注意**：PowerShell 无 `cat`，commit message 用多个 `-m` 或临时文件；`&&`/`||` 不是分隔符，用 `;`。
 
+### 依赖管理约定（硬性）
+
+- 依赖的**唯一真源**是 `pyproject.toml`；新增/移除依赖只改这里，改完无需手动动 `requirements.txt`。
+- `requirements.txt` 在此作为**锁文件（生成产物），不可手改**，仅作为非 uv 环境的 `pip install -r requirements.txt` 兼容快照。
+- 生成器**唯一锁定 `pip-compile`**（来自 `pip-tools`），不再用 uv 导出；dev 工具（`pip-tools` / `ruff` / `pytest`）版本 pin 在 `pyproject.toml` 的 `dev` 组。
+- 提交涉 `pyproject.toml` / `uv.lock` 的变更时，`pre-commit` 钩子（`scripts/hooks/pre-commit`）用 `pip-compile` 自动重新生成 `requirements.txt` 并暂存；**若本机缺 `pip-tools` 则 `exit 1` 阻止提交**（勿 `--no-verify` 绕过）。
+- [`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在 PR 上用与 hook 完全一致的 `pip-compile` 重新生成并对比，拦截任何绕过本机 hook 的锁文件不同步提交；ruff 检查当前以注释占位，将来启用后在此统一执行。
+
 ## 两条独立运行路径（最高优先级约束）
 
 项目存在**两条代码路径互相独立**的运行路径：**内存中的会话对象各自维护**（路径 A 全局 `account/student/stu_msg`；路径 B `Session` 对象），但**共享磁盘上的状态文件**（`tokens.json` / `chat_history.json` / `config.json` / `uploads.json` / `logs/`）。任一路径扫码后写回的 `tokens.json` 可被另一路径直接读取复用，**只有凭证不存在或失效时才需扫码**。

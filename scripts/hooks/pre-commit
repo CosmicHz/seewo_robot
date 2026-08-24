@@ -1,35 +1,46 @@
 #!/usr/bin/env bash
-# pre-commit: pyproject.toml / uv.lock 变更时，自动重新导出 requirements.txt 并 stage，
-# 保证 requirements.txt 与 uv.lock 永不脱节。
+# pre-commit: pyproject.toml / uv.lock 变更时，用 pip-compile 重新生成 requirements.txt 并 stage。
+# requirements.txt 是只读的锁文件（生成产物），依赖一律在 pyproject.toml 声明。
+#
+# 缺 pip-compile 时**阻止**提交（exit 1），避免 requirements.txt 与 pyproject 脱节。
+# 仅依赖变更时触发；无关改动不受影响。
+#
+# 将来若要对代码做 ruff 校验，可在此段后追加一个同类守卫：缺 ruff 则 exit 1。
 #
 # 激活方式（一次性）：
 #   git config core.hooksPath scripts/hooks
 #
-# 跳过方式（临时）：
+# 跳过方式（临时，会绕过后端校验）：
 #   git commit --no-verify
 
 set -e
 
 staged="$(git diff --cached --name-only)"
 
-# 依赖变更时才重导出 requirements.txt；否则直接结束
+# 依赖变更时才重生成 requirements.txt；否则直接结束
 if ! printf '%s\n' "$staged" | grep -qE '^(pyproject\.toml|uv\.lock)$'; then
     exit 0
 fi
 
-# uv 不在 PATH 时静默跳过（避免阻塞无法生成）
-if ! command -v uv >/dev/null 2>&1; then
-    echo "[pre-commit] uv 未找到，跳过 requirements.txt 同步" >&2
-    exit 0
+# 缺 pip-compile 则阻止提交（不得让锁文件脱节）
+if ! command -v pip-compile >/dev/null 2>&1; then
+    echo "[pre-commit] 错误：依赖已变更，但未安装 pip-compile（来自 pip-tools）" >&2
+    echo "  请安装：pip install pip-tools==7.6.1  （或 uv sync --extra dev）" >&2
+    echo "  不要用 --no-verify 绕过，CI 会拦截未同步的 requirements.txt" >&2
+    exit 1
 fi
 
-echo "[pre-commit] 检测到依赖文件变更，同步 requirements.txt ..."
+echo "[pre-commit] 检测到依赖文件变更，用 pip-compile 重新生成 requirements.txt ..."
 
-# 生成到临时文件再比较，避免无变化时把文件 mtime 弄脏
+# 生成到临时文件，成功后再替换，避免中途失败把锁文件弄坏
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
-uv export --format requirements-txt --no-hashes --no-header --output-file "$tmp" >/dev/null
+# 隔离本机 pip 全局配置（镜像/trusted-host），保证锁文件不依赖个人环境、可复现
+if ! PIP_CONFIG_FILE=/dev/null pip-compile --no-header --no-emit-index-url --strip-extras --output-file "$tmp" pyproject.toml >/dev/null 2>&1; then
+    echo "[pre-commit] 错误：pip-compile 重新生成 requirements.txt 失败" >&2
+    exit 1
+fi
 
 if [ -f requirements.txt ] && diff -q requirements.txt "$tmp" >/dev/null 2>&1; then
     echo "[pre-commit] requirements.txt 已是最新，无需更新"
@@ -38,4 +49,4 @@ fi
 
 mv "$tmp" requirements.txt
 git add requirements.txt
-echo "[pre-commit] 已更新并暂存 requirements.txt"
+echo "[pre-commit] 已重新生成并暂存 requirements.txt"
