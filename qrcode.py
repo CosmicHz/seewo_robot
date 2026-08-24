@@ -1,6 +1,5 @@
 # 代码源自@石头三颗：https://zhuanlan.zhihu.com/p/21916363 @金明熠 修改，使用GPT4-o解析和优化
 
-import numpy as np
 from PIL import Image
 
 
@@ -70,18 +69,16 @@ def get_qrcode(cell, img, w: int, h: int):
         bitcode_row = [0] * len(bitcode[0])
         bitcode.append(bitcode_row)
 
-    bitarr = np.array(bitcode, dtype=np.uint8)
-
-    H, W = bitarr.shape
+    H, W = len(bitcode), len(bitcode[0])
     code = ""
 
     for i in range(1, H, 2):
         for j in range(1, W, 2):
             char_index = (
-                (bitarr[i - 1, j - 1] << 3)
-                + (bitarr[i - 1, j] << 2)
-                + (bitarr[i, j - 1] << 1)
-                + bitarr[i, j]
+                (bitcode[i - 1][j - 1] << 3)
+                + (bitcode[i - 1][j] << 2)
+                + (bitcode[i][j - 1] << 1)
+                + bitcode[i][j]
             )
             # Map the unicode character to the corresponding double-character representation
             code += unicode_mapping[unicode_chr[char_index]]
