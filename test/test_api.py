@@ -20,9 +20,9 @@ HEADERS = {"X-API-Key": API_KEY, "Content-Type": "application/json"}
 
 def test_endpoint(method, path, label, **kwargs):
     url = f"{BASE_URL}{path}"
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"[{label}] {method} {path}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     try:
         if method == "GET":
             resp = requests.get(url, headers=HEADERS, timeout=10, **kwargs)
@@ -39,9 +39,11 @@ def test_endpoint(method, path, label, **kwargs):
                 ]
                 print(f"Messages count: {len(msgs)}")
                 for i, m in enumerate(msgs):
-                    print(f"  [{i}] id={m.get('id')}, sender={m.get('sender')}, "
-                          f"senderName={m.get('senderName')}, "
-                          f"type={m.get('type')}, content={str(m.get('content',''))[:60]}")
+                    print(
+                        f"  [{i}] id={m.get('id')}, sender={m.get('sender')}, "
+                        f"senderName={m.get('senderName')}, "
+                        f"type={m.get('type')}, content={str(m.get('content', ''))[:60]}"
+                    )
                 data.pop("messages", None)
             print(json.dumps(data, ensure_ascii=False, indent=2))
         except Exception:
@@ -70,9 +72,9 @@ def main():
     test_endpoint("GET", "/api/load_earlier?count=10", "6. 加载更早消息")
 
     # 7. 全量同步（短超时，可能耗时较长）
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("[7. 全量同步] POST /api/sync_all")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     try:
         resp = requests.post(
             f"{BASE_URL}/api/sync_all",
@@ -89,19 +91,19 @@ def main():
     test_endpoint("GET", "/api/history?limit=10", "8. 同步后历史记录")
 
     # 9. 发送消息（跳过，避免误发）
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("[9. 发送消息] POST /api/send - 跳过（避免误发）")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # 10. 发送图片（跳过）
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("[10. 发送图片] POST /api/send_image - 跳过")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # 11. 发送音频（跳过）
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("[11. 发送音频] POST /api/send_audio - 跳过")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # 12. 刷新会话
     test_endpoint("POST", "/api/refresh", "12. 刷新会话")

@@ -77,12 +77,12 @@ class MockData:
     """模拟数据存储"""
 
     def __init__(self):
-        self.users = {}       # uid -> {userId, token, name, type}
-        self.students = {}    # uid -> {schoolUid, classUid, userUid, realName, name, uid, sid}
-        self.classes = {}     # classUid -> {uid, name, roomUid, schoolUid}
-        self.messages = []    # 留言列表
-        self.uploads = {}     # fileId -> {downloadUrl, filename, uploadTime}
-        self.events = []      # 考勤事件
+        self.users = {}  # uid -> {userId, token, name, type}
+        self.students = {}  # uid -> {schoolUid, classUid, userUid, realName, name, uid, sid}
+        self.classes = {}  # classUid -> {uid, name, roomUid, schoolUid}
+        self.messages = []  # 留言列表
+        self.uploads = {}  # fileId -> {downloadUrl, filename, uploadTime}
+        self.events = []  # 考勤事件
         self._next_msg_id = 1000
         self._init_defaults()
 
@@ -119,16 +119,34 @@ class MockData:
         # 预置几条消息
         now = int(time.time() * 1000)
         self._add_message(
-            school_uid, class_uid, student_uid, parent_uid,
-            "student", 1, "爸爸/妈妈，我今天在学校很开心！", now - 3600000,
+            school_uid,
+            class_uid,
+            student_uid,
+            parent_uid,
+            "student",
+            1,
+            "爸爸/妈妈，我今天在学校很开心！",
+            now - 3600000,
         )
         self._add_message(
-            school_uid, class_uid, parent_uid, student_uid,
-            "parent", 1, "宝贝加油！放学我来接你", now - 1800000,
+            school_uid,
+            class_uid,
+            parent_uid,
+            student_uid,
+            "parent",
+            1,
+            "宝贝加油！放学我来接你",
+            now - 1800000,
         )
         self._add_message(
-            school_uid, class_uid, student_uid, parent_uid,
-            "student", 1, "好的！", now - 900000,
+            school_uid,
+            class_uid,
+            student_uid,
+            parent_uid,
+            "student",
+            1,
+            "好的！",
+            now - 900000,
         )
 
         # 考勤事件
@@ -185,9 +203,19 @@ class MockData:
                 m["receiverUid"] = uid
         self.users.pop(old_uid, None)
 
-    def _add_message(self, schoolUid, classUid, senderUid, receiverUid,
-                     senderType, msgType, content, createTime=None,
-                     resUrl="", voiceLength=0):
+    def _add_message(
+        self,
+        schoolUid,
+        classUid,
+        senderUid,
+        receiverUid,
+        senderType,
+        msgType,
+        content,
+        createTime=None,
+        resUrl="",
+        voiceLength=0,
+    ):
         self._next_msg_id += 1
         msg = {
             "id": self._next_msg_id,
@@ -216,7 +244,8 @@ class MockData:
         - start<1 非法（生产返回 SQL 语法错误 statusCode=50000），由调用方处理
         """
         msgs = [
-            m for m in self.messages
+            m
+            for m in self.messages
             if (m["senderUid"] == parent_uid and m["receiverUid"] == child_uid)
             or (m["senderUid"] == child_uid and m["receiverUid"] == parent_uid)
         ]
@@ -283,8 +312,10 @@ def check_qrcode():
     """查询扫码状态 - 自动确认登录，立即返回成功"""
     # 返回当前已知的家长用户（可能已被 adopt 过）
     uid = next(
-        (u for u, v in mock_data.users.items() if v.get("type") == "parent"),  # 取第一个
-        "mock_parent_001"  # 回退到默认家长
+        (
+            u for u, v in mock_data.users.items() if v.get("type") == "parent"
+        ),  # 取第一个
+        "mock_parent_001",  # 回退到默认家长
     )
     user = mock_data.users.get(uid, {})
     data = {
@@ -310,13 +341,14 @@ def check_user_status(uid):
 
 @app.route(
     "/soul-bootstrap/home-school-service/mobile/kidnote/v1/note/dialogs",
-    methods=["GET"]
+    methods=["GET"],
 )
 def get_last_msg():
     """获取最近消息摘要"""
     user_uid = request.args.get("userUid", "")
     msgs = [
-        m for m in mock_data.messages
+        m
+        for m in mock_data.messages
         if m["senderUid"] == user_uid or m["receiverUid"] == user_uid
     ]
     if not msgs:
@@ -374,13 +406,17 @@ def handle_get_notes(params):
     # 对齐生产：start 是真分页参数（1-based 页码），page 字段无效可省略
     start = params.get("start", 1)
     page_size = params.get("pageSize", 10)
-    print(f"[NOTES] parentUid={parent_uid}, childUid={child_uid}, start={start}, 总消息数={len(mock_data.messages)}")
+    print(
+        f"[NOTES] parentUid={parent_uid}, childUid={child_uid}, start={start}, 总消息数={len(mock_data.messages)}"
+    )
     # 对齐生产：start<1 触发 SQL 语法错误（statusCode=50000）
     if start < 1:
-        return make_px_response({
-            "statusCode": 50000,
-            "message": "org.springframework.jdbc.BadSqlGrammarException: start 必须 >= 1",
-        })
+        return make_px_response(
+            {
+                "statusCode": 50000,
+                "message": "org.springframework.jdbc.BadSqlGrammarException: start 必须 >= 1",
+            }
+        )
     msgs = mock_data.get_messages(parent_uid, child_uid, start, page_size)
     print(f"[NOTES] 匹配到 {len(msgs)} 条")
     return make_px_response({"statusCode": 200, "result": msgs})
@@ -405,7 +441,9 @@ def handle_post_note(params):
         resUrl=params.get("resUrl", ""),
         voiceLength=params.get("voiceLength", 0),
     )
-    print(f"[MSG] {msg['senderType']}({msg['senderUid']}) -> {msg['receiverUid']}: {msg['content'][:50]}")
+    print(
+        f"[MSG] {msg['senderType']}({msg['senderUid']}) -> {msg['receiverUid']}: {msg['content'][:50]}"
+    )
     return {"statusCode": 200, "message": "发送成功", "data": {"id": msg["id"]}}
 
 
@@ -498,10 +536,13 @@ def get_yunban_notes(parent_uid, child_uid):
 )
 def get_parent_note_count(uid):
     """获取家长留言计数"""
-    count = len([
-        m for m in mock_data.messages
-        if m["receiverUid"] == uid or m["senderUid"] == uid
-    ])
+    count = len(
+        [
+            m
+            for m in mock_data.messages
+            if m["receiverUid"] == uid or m["senderUid"] == uid
+        ]
+    )
     return jsonify({"data": {"count": count}})
 
 
@@ -555,7 +596,9 @@ def yunban_send_note():
         resUrl=data.get("resUrl", ""),
         voiceLength=data.get("voiceLength", 0),
     )
-    print(f"[MSG-YUNBAN] {msg['senderType']} -> {msg['receiverUid']}: {msg['content'][:50]}")
+    print(
+        f"[MSG-YUNBAN] {msg['senderType']} -> {msg['receiverUid']}: {msg['content'][:50]}"
+    )
     return jsonify({"statusCode": 200, "data": {"id": msg["id"]}})
 
 
@@ -580,10 +623,16 @@ def upload_to_cos():
         "uploadTime": datetime.now().isoformat(),
     }
     print(f"[UPLOAD] {filename} -> {download_url}")
-    return jsonify({
-        "code": 0,
-        "data": {"downloadUrl": download_url, "fileId": file_id, "filename": filename},
-    })
+    return jsonify(
+        {
+            "code": 0,
+            "data": {
+                "downloadUrl": download_url,
+                "fileId": file_id,
+                "filename": filename,
+            },
+        }
+    )
 
 
 @app.route("/upload/files/<file_id>/<filename>", methods=["GET"])
@@ -610,7 +659,9 @@ def mock_add_message():
     sender_uid = data.get("senderUid", "mock_student_001")
     # 默认接收者用当前家长 UID（可能已被 adopt 过）
     default_parent = next(
-        (u for u, v in mock_data.users.items() if v.get("type") == "parent"),  # 取第一个
+        (
+            u for u, v in mock_data.users.items() if v.get("type") == "parent"
+        ),  # 取第一个
         "mock_parent_001",  # 回退到默认家长
     )
     sender_info = mock_data.students.get(sender_uid, {})
@@ -675,8 +726,12 @@ def mock_load():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Mock Seewo Server - 调试用模拟希沃服务器")
-    parser.add_argument("--port", type=int, default=MOCK_PORT, help="服务端口 (默认 9000)")
+    parser = argparse.ArgumentParser(
+        description="Mock Seewo Server - 调试用模拟希沃服务器"
+    )
+    parser.add_argument(
+        "--port", type=int, default=MOCK_PORT, help="服务端口 (默认 9000)"
+    )
     parser.add_argument("--load", action="store_true", help="从文件加载已有数据")
     args = parser.parse_args()
 

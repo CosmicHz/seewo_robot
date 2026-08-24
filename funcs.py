@@ -56,7 +56,9 @@ def logw(t: str) -> None:
 
 
 # 聊天记录存储（mock 模式用独立文件，避免测试数据污染真实记录）
-CHAT_LOG_FILE = project_path("chat_history_mock.json" if _use_mock else "chat_history.json")
+CHAT_LOG_FILE = project_path(
+    "chat_history_mock.json" if _use_mock else "chat_history.json"
+)
 
 
 def load_chat_history() -> list[Message]:
@@ -88,21 +90,27 @@ def overwrite_chat_history_file(messages: list[Message]) -> None:
 
 
 def append_message(
-    msg_id: int, content: str, msg_type: str = "text", sender: str = "", sender_name: str = ""
+    msg_id: int,
+    content: str,
+    msg_type: str = "text",
+    sender: str = "",
+    sender_name: str = "",
 ) -> None:
     """追加一条消息到聊天记录
 
     注意：消息会按ID排序，确保顺序正确（旧→新）
     """
     messages = load_chat_history()
-    messages.append(Message(
-        id=msg_id,
-        time=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-        content=content,
-        type=msg_type,
-        sender=sender,
-        senderName=sender_name,
-    ))
+    messages.append(
+        Message(
+            id=msg_id,
+            time=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+            content=content,
+            type=msg_type,
+            sender=sender,
+            senderName=sender_name,
+        )
+    )
     # 按ID排序（旧→新）
     messages.sort(key=lambda m: m.id)
     overwrite_chat_history_file(messages)

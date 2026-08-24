@@ -514,9 +514,7 @@ def load_earlier_messages():
         local = datasource._messages
         before_id = int(request.args.get("before_id", 0))
         if before_id <= 0:
-            before_id = (
-                max(m.id for m in local) + 1 if local else 0
-            )
+            before_id = max(m.id for m in local) + 1 if local else 0
         if before_id <= 0 or not local:
             return jsonify(
                 {

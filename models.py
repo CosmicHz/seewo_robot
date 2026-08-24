@@ -5,6 +5,7 @@
 - Message：格式化后消息（chat_history.json 存储），slots + 可变（load_local 补 senderName）
 - MessageResponse：msg.get 的响应包装，frozen + slots，容器只读但 result list 可变
 """
+
 from dataclasses import dataclass, field
 
 
@@ -15,6 +16,7 @@ class RawMessage:
     frozen + slots：只读，从 from_dict 构造后不再改。
     字段缺失用默认值兜底，对齐 main.py 的 .get("senderType", "unknown") / .get("type", 1) 等。
     """
+
     id: int = 0
     senderUid: str = ""
     senderType: str = "unknown"
@@ -42,7 +44,7 @@ class RawMessage:
         )
 
 
-@dataclass(slots=True)            # 注意：不 frozen
+@dataclass(slots=True)  # 注意：不 frozen
 class Message:
     """格式化后消息（message_service._format_msg 产出 / chat_history.json 存储）。
 
@@ -50,6 +52,7 @@ class Message:
     无需 dataclasses.replace 重建。
     type 字段标注 int|str：保留 main.py 写 str / message_service 写 int 的既有混合行为。
     """
+
     id: int = 0
     time: str = ""
     content: str = ""
@@ -64,7 +67,7 @@ class Message:
             id=int(d.get("id", 0)),
             time=d.get("time", ""),
             content=d.get("content", ""),
-            type=d.get("type", 1),       # 不强制 int()，保留文件原始类型
+            type=d.get("type", 1),  # 不强制 int()，保留文件原始类型
             sender=d.get("sender", "unknown"),
             senderName=d.get("senderName", ""),
             resUrl=d.get("resUrl", ""),
@@ -78,6 +81,7 @@ class MessageResponse:
     frozen + slots：容器本身只读；result 是 list，list 自身可变，
     需要 append/extend 时直接操作 list，不必改容器。
     """
+
     statusCode: int = 0
     message: str = ""
     result: list[RawMessage] = field(default_factory=list)

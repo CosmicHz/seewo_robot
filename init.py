@@ -88,7 +88,9 @@ class urls:
             mcampus = "https://m-campus.seewo.com"
             id_base = "https://id.seewo.com"
 
-        self.status = f"{campus}/soul-bootstrap/seewo-phoenix-blood-server/mobile/user/v1/"
+        self.status = (
+            f"{campus}/soul-bootstrap/seewo-phoenix-blood-server/mobile/user/v1/"
+        )
         self.get_last_msg = f"{campus}/soul-bootstrap/home-school-service/mobile/kidnote/v1/note/dialogs?userUid="
         self.api = f"{mcampus}/class/apis.json?action="
         self.login_api = f"{id_base}/auth/loginApi?_time" + self.time

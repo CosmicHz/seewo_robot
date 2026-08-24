@@ -34,7 +34,7 @@ class acc:
         token_expired: 当 auto_login=False 且 Token 无效时设为 True
     """
 
-    def __init__(self, type=0, auto_login=True, max_retries = 3) -> None:
+    def __init__(self, type=0, auto_login=True, max_retries=3) -> None:
         self.token_expired = False
         info = None
 
@@ -58,7 +58,7 @@ class acc:
         self.uid = info["userId"]
         self._set_headers(info)
         # 检查登录是否成功，失败则重试
-        
+
         for attempt in range(max_retries):
             if self.check_status():
                 return None

@@ -49,9 +49,15 @@ class api:
                 decoded = pxdecode(resp_json)
                 if isinstance(decoded, bytes):
                     decoded = decoded.decode("utf-8")
-                logger.debug("响应 %s status=%s 解密=%.300s", url, resp.status_code, decoded)
+                logger.debug(
+                    "响应 %s status=%s 解密=%.300s", url, resp.status_code, decoded
+                )
             else:
-                logger.debug("响应 %s status=%s body=%.200s", url, resp.status_code, resp.text)
+                logger.debug(
+                    "响应 %s status=%s body=%.200s", url, resp.status_code, resp.text
+                )
         except Exception:
-            logger.debug("响应 %s status=%s body=%.200s", url, resp.status_code, resp.text)
+            logger.debug(
+                "响应 %s status=%s body=%.200s", url, resp.status_code, resp.text
+            )
         return resp_json

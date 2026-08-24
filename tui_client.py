@@ -234,7 +234,7 @@ class SeewoTUI(App):
 
     async def handle_login_flow(self) -> None:
         """处理登录流程：获取二维码 → 显示 → 轮询状态"""
-        if getattr(self, '_login_in_progress', False):
+        if getattr(self, "_login_in_progress", False):
             return
         self._login_in_progress = True
         try:
@@ -277,6 +277,7 @@ class SeewoTUI(App):
                         f.write(base64.b64decode(qr_base64))
 
                     from qrcode import qrcode_to_text
+
                     qr_text = qrcode_to_text(temp_file)
                 finally:
                     if os.path.exists(temp_file):
@@ -309,7 +310,9 @@ class SeewoTUI(App):
                         await self.load_messages()
                         return
                     elif login_status == "error":
-                        container.mount(Static(f"登录失败: {status_data.get('message', '')}"))
+                        container.mount(
+                            Static(f"登录失败: {status_data.get('message', '')}")
+                        )
                         return
                     # pending: 继续轮询
             container.mount(Static("登录超时，请重试"))
@@ -358,11 +361,7 @@ class SeewoTUI(App):
                 data = resp.json()
                 self.messages = data.get("messages", [])
                 # earliest_id 从 messages 推断（响应体不再返回此字段）
-                earliest = (
-                    min(m["id"] for m in self.messages)
-                    if self.messages
-                    else 0
-                )
+                earliest = min(m["id"] for m in self.messages) if self.messages else 0
                 self.has_more = int(earliest) > 0
                 self.render_messages()
         except Exception as e:
@@ -378,9 +377,7 @@ class SeewoTUI(App):
             import requests
 
             # 游标=当前最早消息 id，服务端据此从本地缓存读更早的一页
-            earliest = (
-                min(m["id"] for m in self.messages) if self.messages else 0
-            )
+            earliest = min(m["id"] for m in self.messages) if self.messages else 0
             loop = asyncio.get_event_loop()
             resp = await loop.run_in_executor(
                 None,
@@ -427,7 +424,9 @@ class SeewoTUI(App):
                 data = resp.json()
                 synced_count = data.get("synced_count", 0)
                 total_count = data.get("total_count", 0)
-                self.status_text = f"同步完成: 新增 {synced_count} 条，共 {total_count} 条"
+                self.status_text = (
+                    f"同步完成: 新增 {synced_count} 条，共 {total_count} 条"
+                )
                 await self.load_history()
             else:
                 self.status_text = f"同步失败: {resp.text}"

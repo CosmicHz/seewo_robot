@@ -8,6 +8,7 @@
 
 后续可引入 queue.Queue + worker 线程串行消费所有请求，调用方接口不变。
 """
+
 import time
 import threading
 import logging
@@ -48,7 +49,7 @@ def post(url, headers, data):
         resp = requests.post(url, headers=headers, data=data, verify=verify)
         if resp.status_code != 429:
             return resp
-        backoff = 2 ** attempt
+        backoff = 2**attempt
         logger.warning("HTTP 429 风控，退避 %ds 重试(attempt=%d)", backoff, attempt)
         time.sleep(backoff)
     return resp  # 重试用尽，返回最后一次响应

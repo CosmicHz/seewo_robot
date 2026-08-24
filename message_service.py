@@ -4,6 +4,7 @@
 读前检查文件 mtime，变了重新加载（感知 main.py 的 append_message 等外部写入）。
 多页聚合（sync_all 翻页循环）在本层；msg.py 只做单次 DAO。
 """
+
 import os
 import time
 import dataclasses
@@ -16,6 +17,7 @@ from sortedcontainers import SortedKeyList
 import request_manager
 
 _MessageSortedList = partial(SortedKeyList, key=attrgetter("id"))
+
 
 class MessageDataSource:
     """消息数据源层：独占 chat_history.json 读写 + 格式化 + 内存缓存。
@@ -47,7 +49,9 @@ class MessageDataSource:
         """写操作后使缓存失效，下次 _refresh 重新加载"""
         self._mtime = -1
 
-    def _format_msg(self, raw: RawMessage, parent_uid, student_uid, student_name) -> Message:
+    def _format_msg(
+        self, raw: RawMessage, parent_uid, student_uid, student_name
+    ) -> Message:
         """格式化单条原始消息（解析时间、判断 sender）
 
         入参 RawMessage（属性访问），返回 Message 实例。
@@ -55,7 +59,8 @@ class MessageDataSource:
         create_time = raw.createTime
         time_str = (
             datetime.fromtimestamp(create_time / 1000).strftime("%Y-%m-%d %H:%M:%S")
-            if create_time else ""
+            if create_time
+            else ""
         )
         sender_uid = raw.senderUid
         if sender_uid == parent_uid:
@@ -81,8 +86,10 @@ class MessageDataSource:
         parent_uid = self._session.account.uid
         student_uid = self._session.student.userUid
         student_name = self._session.student.name
-        formatted = [self._format_msg(m, parent_uid, student_uid, student_name)
-                     for m in raw_messages]
+        formatted = [
+            self._format_msg(m, parent_uid, student_uid, student_name)
+            for m in raw_messages
+        ]
         merge_messages(formatted)
         self._invalidate()
         self._refresh()
@@ -98,16 +105,24 @@ class MessageDataSource:
         """
         self._refresh()
         total = len(self._messages)
-        page = self._messages[offset:offset + limit]
+        page = self._messages[offset : offset + limit]
         student_name = self._session.student.name if self._session.student else ""
         result = []
         for m in page:
             if not m.senderName:
                 s = m.sender
-                m.senderName = "家长" if s == "parent" else (
-                    student_name if s == "student" else "未知")
+                m.senderName = (
+                    "家长"
+                    if s == "parent"
+                    else (student_name if s == "student" else "未知")
+                )
             result.append(dataclasses.asdict(m))
-        return {"status": "ok", "total": total, "count": len(result), "messages": result}
+        return {
+            "status": "ok",
+            "total": total,
+            "count": len(result),
+            "messages": result,
+        }
 
     def fetch_latest(self, count=10):
         """实时向希沃取最新一页，格式化，不持久化（对应 /api/messages）"""
@@ -118,8 +133,11 @@ class MessageDataSource:
         messages = _MessageSortedList(
             self._format_msg(m, parent_uid, student_uid, student_name) for m in raw
         )
-        return {"status": "ok", "count": len(messages),
-                "messages": [dataclasses.asdict(m) for m in messages]}
+        return {
+            "status": "ok",
+            "count": len(messages),
+            "messages": [dataclasses.asdict(m) for m in messages],
+        }
 
     def load_earlier_from_local(self, before_id, count=50):
         """从本地缓存读 id < before_id 的更早消息（纯本地，不请求希沃）
@@ -137,8 +155,12 @@ class MessageDataSource:
         earlier = self._messages[:pos]
         has_more = len(earlier) > count
         page = earlier[-count:] if earlier else []
-        return {"status": "ok", "has_more": has_more, "count": len(page),
-                "messages": [dataclasses.asdict(m) for m in page]}
+        return {
+            "status": "ok",
+            "has_more": has_more,
+            "count": len(page),
+            "messages": [dataclasses.asdict(m) for m in page],
+        }
 
     def sync_all(self, batch_size=50, delay=2.0):
         """全量同步所有历史到本地（对应 /api/sync_all）
@@ -175,5 +197,9 @@ class MessageDataSource:
         all_msgs = [m for m in earlier + latest if m.id not in existing_ids]
         formatted = self._persist(all_msgs)
         total_count = len(self._messages)
-        return {"status": "ok", "message": "全量同步完成",
-                "synced_count": len(formatted), "total_count": total_count}
+        return {
+            "status": "ok",
+            "message": "全量同步完成",
+            "synced_count": len(formatted),
+            "total_count": total_count,
+        }

@@ -1,6 +1,7 @@
 import sys
 import time
-sys.path.append('.')
+
+sys.path.append(".")
 from yunabn_token import test
 
 classlist = test.getclasslist()
