@@ -168,7 +168,7 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 | 模型 | frozen | 用途 |
 | --- | --- | --- |
 | `RawMessage` | ✅ frozen+slots | 希沃原始消息（`msg.get().result` 列表元素），只读，字段缺失用默认值兜底（`senderType` 默认 `"unknown"`、`type` 默认 `1` 等，对齐原 `dict.get(key, default)` 行为） |
-| `Message` | ❌ 只 slots，**可变** | 格式化后消息（`chat_history.json` 存储 / `message_service._messages` 缓存）。可变是为方便 `load_local` 补 `senderName`（直接 `m.senderName = name`，不必 `replace`）。`type` 标注 `int | str`：保留 main.py 写`str(msg_type)` / message_service 写 int 的既有混合行为 |
+| `Message` | ❌ 只 slots，**可变** | 格式化后消息（`chat_history.json` 存储 / `message_service._messages` 缓存）。可变是为方便 `load_local` 补 `senderName`（直接 `m.senderName = name`，不必 `replace`）。`type` 标注 `int \| str`：保留 main.py 写`str(msg_type)` / message_service 写 int 的既有混合行为 |
 | `MessageResponse` | ✅ frozen+slots | `msg.get` 的响应包装（含 `result: list[RawMessage]`）。容器只读，但 `result` 是 list 自身可变 |
 
 **核心改造点**：
