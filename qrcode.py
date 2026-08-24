@@ -1,4 +1,4 @@
-# 代码源自@石头三颗：https://zhuanlan.zhihu.com/p/21916363 @金明熠 修改，使用GPT4-o解析和优化
+# 代码源自@石头三颗：https://zhuanlan.zhihu.com/p/21916363 @金明熠 修改，使用 GPT4-o 和 DeepSeek V4 0813 解析和优化
 
 from PIL import Image
 
