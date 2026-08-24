@@ -6,7 +6,7 @@ import json
 import time
 import os
 
-from init import _use_mock
+from init import _use_mock, project_path
 from models import Message
 
 filedate = time.strftime("%Y-%m-%d", time.localtime())
@@ -47,7 +47,7 @@ def datenow() -> str:
 def logw(t: str) -> None:
     global filedate
     log = datenow() + t + "\n"
-    log_dir = "logs/"
+    log_dir = project_path("logs/")
     dirc = log_dir + filedate + ".log"
     if not os.path.isdir(log_dir):
         os.mkdir(log_dir)
@@ -56,7 +56,7 @@ def logw(t: str) -> None:
 
 
 # 聊天记录存储（mock 模式用独立文件，避免测试数据污染真实记录）
-CHAT_LOG_FILE = "chat_history_mock.json" if _use_mock else "chat_history.json"
+CHAT_LOG_FILE = project_path("chat_history_mock.json" if _use_mock else "chat_history.json")
 
 
 def load_chat_history() -> list[Message]:

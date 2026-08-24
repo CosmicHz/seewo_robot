@@ -66,7 +66,6 @@ pip install -r requirements.txt
 - `requests`、`pillow`、`requests-toolbelt` —— 基础功能必需
 - `flask` —— 路径 B 的 REST API 服务端
 - `textual` —— 路径 B 的 TUI 客户端
-- `numpy` —— 终端二维码渲染
 
 ### 2. 准备配置文件
 

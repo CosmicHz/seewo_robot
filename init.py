@@ -10,7 +10,16 @@ import time
 import json
 import os
 
-CONFIG_FILE = "config.json"
+# 项目根目录：基于 __file__ 锚定，使状态文件不依赖进程当前工作目录
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def project_path(name: str) -> str:
+    """将相对文件名解析为项目根目录下的绝对路径"""
+    return os.path.join(_BASE_DIR, name)
+
+
+CONFIG_FILE = project_path("config.json")
 
 
 def load_config() -> dict:
@@ -28,11 +37,11 @@ def load_config() -> dict:
 config = load_config()
 
 # 二维码图片保存路径（登录时生成）
-qrcode_file = "qrcode.png"
+qrcode_file = project_path("qrcode.png")
 # 登录凭证存储路径（含 userId 和 token 等，实质上是登录时希沃服务器响应的内容）
-token_file = "tokens.json"
+token_file = project_path("tokens.json")
 # 上传文件记录存储路径
-uploads_file = "uploads.json"
+uploads_file = project_path("uploads.json")
 if not os.path.isfile(uploads_file):
     with open(uploads_file, "wb") as f:
         f.write(b"{}")

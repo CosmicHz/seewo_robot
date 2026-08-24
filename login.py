@@ -184,7 +184,7 @@ def login():
         print(str(int(time.time())) + ": " + message + str(status), end="\r")
     else:
         if status == 202:
-            write_file("tokens.json", json.dumps(data).encode())
+            write_file(token_file, json.dumps(data).encode())
             return True
         else:
             return False

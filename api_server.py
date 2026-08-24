@@ -14,15 +14,13 @@ import threading
 from flask import Flask, request, jsonify
 from functools import wraps
 
-os.chdir(os.path.dirname(__file__))
-
-from init import qrcode_file, config  # noqa: E402
-from login import acc, download_qrcode, check_qrcode  # noqa: E402
-from funcs import write_file  # noqa: E402
-from stu import stu  # noqa: E402
-from msg import msg  # noqa: E402
-from upload import Upload  # noqa: E402
-from message_service import MessageDataSource  # noqa: E402
+from init import qrcode_file, token_file, config
+from login import acc, download_qrcode, check_qrcode
+from funcs import write_file
+from stu import stu
+from msg import msg
+from upload import Upload
+from message_service import MessageDataSource
 
 app = Flask(__name__)
 
@@ -203,7 +201,7 @@ def _poll_login(cookies):
 
     with _login_lock:
         if status == 202 and data:
-            write_file("tokens.json", json.dumps(data).encode())
+            write_file(token_file, json.dumps(data).encode())
             _login_state["success"] = True
             session.refresh()
         _login_state["completed"] = True

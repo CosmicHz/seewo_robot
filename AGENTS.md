@@ -104,13 +104,13 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 - **[message_service.py](message_service.py)**：消息数据源层。`MessageDataSource` 独占 `chat_history.json` 读写、消息格式化、内存缓存（基于文件 mtime 感知 `main.py` 等外部写入）。`_format_msg(raw: RawMessage) -> Message`；`_messages: list[Message]`；对外方法返回 dict（边界 `dataclasses.asdict` 转 dict 给 jsonify）。`sync_all` 翻页循环在本层。
 - **[models.py](models.py)**：数据模型层。进程内数据传输用 dataclass，跨进程边界（Flask jsonify / 写 chat_history.json / pxencode 网络请求）调 `dataclasses.asdict()` 转换。详见 [数据模型层（models.py）](#数据模型层modelspy)。
 - **[api_server.py](api_server.py)**：入口层，handler 薄层化。全局 `session = Session()` + 全局 `datasource = MessageDataSource(session)`（构造时仅 `_refresh` 读 mtime，不碰 session）。
-- **[init.py](init.py)**：全局配置 `config`、文件路径、`_use_mock`、公共请求头 `headers_nocookie`、希沃 URL 集合 `urls`。
+- **[init.py](init.py)**：全局配置 `config`、文件路径、`_use_mock`、公共请求头 `headers_nocookie`、希沃 URL 集合 `urls`。所有状态文件路径（`config.json`/`tokens.json`/`uploads.json`/`qrcode.png`）由 `project_path()` 基于 `__file__` 锚定到项目根目录，不依赖进程当前工作目录。
 - **[login.py](login.py)**：`acc` 账户对象 + `download_qrcode` / `check_qrcode` / `login` 流程。`acc(auto_login=True/False)` 控制过期时是否自动触发扫码：`main.py` 用 True，`api_server.py` 用 False。
 - **[stu.py](stu.py)**：学生信息 DAO，默认 `count=0` 取列表第一个学生
 - **[funcs.py](funcs.py)**：工具函数。`CHAT_LOG_FILE` 根据 `_use_mock` 切换 `chat_history_mock.json` / `chat_history.json`。`load_chat_history() -> list[Message]`、`append_message` / `merge_messages(messages: list[Message])` 只维护 `messages` 字段，不维护 `earliest_id` / `last_id`。
 - **[upload.py](upload.py)**：文件上传到希沃云存储接口，返回 `downloadUrl`。
 - **[yunban.py](yunban.py)**：云班功能扩展（班级列表、考勤事件、签到等）。`getpass` 用于获取离线验证码，`getpass2` 依赖 pandas 剪贴板（**损坏**）。
-- **[qrcode.py](qrcode.py)**：终端二维码渲染（依赖 `numpy` + `pillow`）。
+- **[qrcode.py](qrcode.py)**：终端二维码渲染（依赖 `pillow`）。
 
 ## 核心 API 端点（路径 B）
 
@@ -386,6 +386,10 @@ def xxx():
   ```
 
 ## 特别注意事项
+
+### 不得硬编码状态文件名
+
+所有状态文件（`config.json` / `tokens.json` / `uploads.json` / `chat_history*.json` / `qrcode.png` / `logs/`）都必须通过 `init.project_path()` 或 `funcs.CHAT_LOG_FILE` / 现有常量引用，**禁止在代码里直接写文件名或相对路径**。路径已由 `project_path()` 基于 `__file__` 锚定到项目根目录，硬编码会破坏该锚定、且无法在 mock 模式下自动切换。
 
 ### 199 字截断是服务器约束的客户端镜像，不可移除
 

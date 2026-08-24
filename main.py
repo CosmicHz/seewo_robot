@@ -10,16 +10,13 @@
 import os
 import time
 
-os.chdir(os.path.dirname(__file__))
-print("当前路径：" + os.getcwd())
-
-from login import acc  # noqa: E402
-from funcs import load_chat_history, append_message, datenow, logw  # noqa: E402
-from stu import stu  # noqa: E402
-from msg import msg  # noqa: E402
-from upload import Upload  # noqa: E402
-from yunban import getpass  # noqa: E402
-from init import config  # noqa: E402
+from login import acc
+from funcs import load_chat_history, append_message, datenow, logw
+from stu import stu
+from msg import msg
+from upload import Upload
+from yunban import getpass
+from init import config
 
 # 轮询配置：批量大小、基础间隔、最大间隔、连续错误上限
 POLL_BATCH_SIZE = config.get("poll_batch_size", 50)
