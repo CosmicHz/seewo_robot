@@ -450,8 +450,7 @@ seewo_robot/
 ├── init.py              # [共享] 全局初始化：读取 config.json、URL 集合、Mock 切换
 ├── qrcode.py            # [共享] 终端二维码渲染
 │
-├── test_api.py          # [调试] API 端点逐个测试脚本
-├── probe_kidnote_api.py # [调试] 批量探测 /api/messages 端点
+├── test/                # [测试] 测试脚本目录（test_api.py 等）
 ├── sync_requirements.py # [工具] 从 pyproject.toml + uv.lock 生成 requirements.txt
 │
 ├── pyproject.toml       # [元] 项目元数据 + uv 依赖声明

@@ -27,8 +27,7 @@ uv run python api_server.py
 uv run python tui_client.py
 
 # 5. 测试
-uv run python test_api.py        # 逐个测试所有 API 端点
-uv run python probe_kidnote_api.py  # 批量探测 /api/messages（含 SQL payload）
+uv run python test/test_api.py    # 逐个测试所有 API 端点
 ```
 
 **Windows 注意**：PowerShell 无 `cat`，commit message 用多个 `-m` 或临时文件；`&&`/`||` 不是分隔符，用 `;`。
@@ -340,8 +339,7 @@ def xxx():
 
 ### 测试脚本
 
-- [test_api.py](test_api.py)：逐个测试所有 API 端点，发送/图片/音频会跳过避免误发。
-- [probe_kidnote_api.py](probe_kidnote_api.py)：批量探测 `/api/messages`，支持多种 payload 类型（含 SQL 注入测试）。
+- [test/test_api.py](test/test_api.py)：逐个测试所有 API 端点，发送/图片/音频会跳过避免误发。
 
 ### 日志
 
@@ -420,7 +418,7 @@ def xxx():
 ```json
 {
   "api_key": "your-secret-key",            // 路径 B 客户端鉴权
-  "api_port": 5001,                        // 路径 B 服务端口（client/tui/test_api 默认回退已对齐 5001）
+  "api_port": 5001,                        // 路径 B 服务端口（client/tui/test_api 默认回退已对齐 5001；test_api.py 现位于 test/）
   "api_host": "0.0.0.0",                   // 路径 B 服务主机
   "poll_batch_size": 50,                   // 路径 A 轮询批量大小
   "base_interval": 1,                      // 路径 A 基础轮询间隔(秒)
@@ -437,4 +435,4 @@ def xxx():
 ## 进一步参考
 
 - [README.md](README.md) — 用户向使用文档
-- [test_api.py](test_api.py) — API 端点逐个测试脚本
+- [test/test_api.py](test/test_api.py) — API 端点逐个测试脚本

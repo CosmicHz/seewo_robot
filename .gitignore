@@ -23,9 +23,13 @@ getybnotes.py
 yunabn_token.py
 send.py
 
+# 临时工作区
+tmp/
+
 # 编辑器
 .vscode/
 .idea/
+.trae/
 
 # 工具
 .ruff_cache/

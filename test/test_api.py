@@ -4,8 +4,12 @@ API 端点测试工具 - 逐个测试所有 API 端点，返回响应
 """
 
 import json
+import os
 import sys
 import requests
+
+# 把仓库根加入 sys.path，使 from init import config 在 test/ 子目录下也能工作
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from init import config
 
