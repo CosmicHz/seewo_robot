@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# pre-commit: pyproject.toml / uv.lock 变更时，用 pip-compile 重新生成 requirements.txt 并 stage。
-# requirements.txt 是只读的锁文件（生成产物），依赖一律在 pyproject.toml 声明。
+# pre-commit: ① 对暂存的 .py 文件执行 ruff format 并重新暂存；② pyproject.toml / uv.lock 变更时，
+# 用 pip-compile 重新生成 requirements.txt 并 stage。
 #
-# 缺 pip-compile 时**阻止**提交（exit 1），避免 requirements.txt 与 pyproject 脱节。
-# 仅依赖变更时触发；无关改动不受影响。
-#
-# 将来若要对代码做 ruff 校验，可在此段后追加一个同类守卫：缺 ruff 则 exit 1。
+# requirements.txt 是只读的锁文件（生成产物），依赖一律在 pyproject.toml 声明；缺 pip-compile 时**阻止**提交。
+# 缺 ruff 时也会**阻止**提交，避免格式化脱节。
+# ① 仅暂存了 Python 文件时触发（ruff format 幂等，已格式化则无改动）。
 #
 # 激活方式（一次性）：
 #   git config core.hooksPath scripts/hooks
@@ -17,7 +16,21 @@ set -e
 
 staged="$(git diff --cached --name-only)"
 
-# 依赖变更时才重生成 requirements.txt；否则直接结束
+# ① ruff format：格式化所有暂存的 python 文件（幂等），并重新暂存
+py_files="$(printf '%s\n' "$staged" | grep '\.py$' || true)"
+if [ -n "$py_files" ]; then
+    if ! command -v ruff >/dev/null 2>&1; then
+        echo "[pre-commit] 错误：暂存了 Python 文件但未安装 ruff（来自 pyproject dev 组）" >&2
+        echo "  请安装：pip install ruff==0.16.4  （或 uv sync --extra dev）" >&2
+        echo "  不要用 --no-verify 绕过，CI 会拦截未格式化的提交" >&2
+        exit 1
+    fi
+    printf '%s\n' "$py_files" | xargs ruff format
+    printf '%s\n' "$py_files" | xargs git add
+    echo "[pre-commit] 已对暂存的 Python 文件执行 ruff format 并重新暂存"
+fi
+
+# ② 依赖变更时才重生成 requirements.txt；否则直接结束
 if ! printf '%s\n' "$staged" | grep -qE '^(pyproject\.toml|uv\.lock)$'; then
     exit 0
 fi
