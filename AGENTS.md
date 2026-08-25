@@ -102,9 +102,9 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 - **[api.py](api.py)**：m-campus API 调用网关。`api().action(type, params, account)` 把 pxencode 后的参数 POST 到 `/class/apis.json?action=<type>`，返回响应 JSON。内部已用 `request_manager.post`。
 - **[msg.py](msg.py)**：纯 DAO。只做单次请求，**不再有**多页聚合逻辑。`get(count, start=1) -> MessageResponse` 是核心方法，`start` 是 1-based 页码（start=1=最新一页，递增往更旧翻页，页内按 id 升序，页间无重叠）；调用方通过 `.result` 取 `list[RawMessage]`。
 - **[message_service.py](message_service.py)**：消息数据源层。`MessageDataSource` 独占 `chat_history.json` 读写、消息格式化、内存缓存（基于文件 mtime 感知 `main.py` 等外部写入）。`_format_msg(raw: RawMessage) -> Message`；`_messages: list[Message]`；对外方法返回 dict（边界 `dataclasses.asdict` 转 dict 给 jsonify）。`sync_all` 翻页循环在本层。
-- **[models.py](models.py)**：数据模型层。进程内数据传输用 dataclass，跨进程边界（Flask jsonify / 写 chat_history.json / pxencode 网络请求）调 `dataclasses.asdict()` 转换。详见 [数据模型层（models.py）](#数据模型层modelspy)。
+- **[models.py](models.py)**：数据模型层。进程内数据传输用 dataclass，跨进程边界（Flask jsonify / 写 chat_history.json / pxencode 网络请求）调 `dataclasses.asdict()` 转换。含 `Config` 配置模型（可变，供 `reload_config` 原地更新实现热重载）。详见 [数据模型层（models.py）](#数据模型层modelspy)。
 - **[api_server.py](api_server.py)**：入口层，handler 薄层化。全局 `session = Session()` + 全局 `datasource = MessageDataSource(session)`（构造时仅 `_refresh` 读 mtime，不碰 session）。
-- **[init.py](init.py)**：全局配置 `config`、文件路径、`_use_mock`、公共请求头 `headers_nocookie`、希沃 URL 集合 `urls`。所有状态文件路径（`config.json`/`tokens.json`/`uploads.json`/`qrcode.png`）由 `project_path()` 基于 `__file__` 锚定到项目根目录，不依赖进程当前工作目录。
+- **[init.py](init.py)**：全局配置 `config`（`models.Config` dataclass，可变）、`reload_config()`（重读 config.json 原地更新以支持热重载）、文件路径、`_use_mock`、公共请求头 `headers_nocookie`、希沃 URL 集合 `urls`。所有状态文件路径（`config.json`/`tokens.json`/`uploads.json`/`qrcode.png`）由 `project_path()` 基于 `__file__` 锚定到项目根目录，不依赖进程当前工作目录。
 - **[login.py](login.py)**：`acc` 账户对象 + `download_qrcode` / `check_qrcode` / `login` 流程。`acc(auto_login=True/False)` 控制过期时是否自动触发扫码：`main.py` 用 True，`api_server.py` 用 False。
 - **[stu.py](stu.py)**：学生信息 DAO，默认 `count=0` 取列表第一个学生
 - **[funcs.py](funcs.py)**：工具函数。`CHAT_LOG_FILE` 根据 `_use_mock` 切换 `chat_history_mock.json` / `chat_history.json`。`load_chat_history() -> list[Message]`、`append_message` / `merge_messages(messages: list[Message])` 只维护 `messages` 字段，不维护 `earliest_id` / `last_id`。
@@ -127,6 +127,7 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 | `/api/load_earlier` | GET | `datasource.load_earlier_from_local(before_id, count)` | 纯本地读更早消息（不请求希沃，靠 `sync_all` 提前同步） |
 | `/api/sync_all` | POST | `datasource.sync_all(batch_size, delay)` | 全量同步历史到本地（防风控） |
 | `/api/refresh` | POST | `session.refresh()` | 重新初始化会话 |
+| `/api/config/reload` | POST | `init.reload_config()` | 热重载 config.json：原地更新全局 config + 重应用日志级别（API Key/长消息策略/拆分正则/mock 路由即时生效） |
 | `/api/login/qrcode` | GET | `download_qrcode` + 后台 `_poll_login` 线程 | 获取登录二维码（Base64），同时启动后台轮询（不阻塞服务） |
 | `/api/login/status` | GET | — | 查询扫码状态（`idle` / `pending` / `ok` / `error`） |
 | `/api/execute` | POST | `os.popen` | 执行命令（受 `allowed_prefixes` 白名单限制：`getpass`、`发送音乐`） |
@@ -170,6 +171,7 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 | `RawMessage` | ✅ frozen+slots | 希沃原始消息（`msg.get().result` 列表元素），只读，字段缺失用默认值兜底（`senderType` 默认 `"unknown"`、`type` 默认 `1` 等，对齐原 `dict.get(key, default)` 行为） |
 | `Message` | ❌ 只 slots，**可变** | 格式化后消息（`chat_history.json` 存储 / `message_service._messages` 缓存）。可变是为方便 `load_local` 补 `senderName`（直接 `m.senderName = name`，不必 `replace`）。`type` 标注 `int \| str`：保留 main.py 写`str(msg_type)` / message_service 写 int 的既有混合行为 |
 | `MessageResponse` | ✅ frozen+slots | `msg.get` 的响应包装（含 `result: list[RawMessage]`）。容器只读，但 `result` 是 list 自身可变 |
+| `Config` | ❌ 只 slots，**可变** | `config.json` 数据模型。可变是为了让 `init.reload_config()` 原地更新实现热重载。typed 字段覆盖已知配置项，未建模的原始键收集到 `extra` 保留，`banPaiConfig` 映射为 `ban_pai_config` dict 字段 |
 
 **核心改造点**：
 
@@ -390,6 +392,10 @@ def xxx():
 ### 不得硬编码状态文件名
 
 所有状态文件（`config.json` / `tokens.json` / `uploads.json` / `chat_history*.json` / `qrcode.png` / `logs/`）都必须通过 `init.project_path()` 或 `funcs.CHAT_LOG_FILE` / 现有常量引用，**禁止在代码里直接写文件名或相对路径**。路径已由 `project_path()` 基于 `__file__` 锚定到项目根目录，硬编码会破坏该锚定、且无法在 mock 模式下自动切换。
+
+### 配置读后即过期，禁止缓存复用
+
+`init.config` 是 `models.Config` 模型。**从 `config.<字段>` 读出的值一离开读点即视为过期，不得缓存在模块常量/变量中复用**，否则热重载不生效。`banPaiConfig` 用 `config.ban_pai_config`。
 
 ### 199 字截断是服务器约束的客户端镜像，不可移除
 

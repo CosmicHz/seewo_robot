@@ -322,6 +322,8 @@ Invoke-WebRequest -Uri "http://localhost:9000/mock/add_message" `
 | `long_message_split_pattern` | `"\\r?\\n"` | 仅路径 B split 策略 | split 模式下的智能拆分点正则（Python 风格）。默认兼容 CRLF/LF 换行。JSON 中反斜杠需双写 |
 | `log_level` | `"INFO"` | 两条路径 | 日志级别，可选 `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 
+> **热重载**：`config.json` 支持热重载，不用重启服务。路径 B 修改后调 `POST /api/config/reload` 即即时生效（API Key、长消息策略/拆分正则、日志级别、mock 路由等）；路径 A（`main.py`）运行时对已启动的轮询仍按旧值，重启后生效。
+
 ### 关于长消息拆分正则的几个例子
 
 - 默认 `"\\r?\\n"`：优先在换行符之前切，避免句子被拦腰截断
@@ -354,6 +356,7 @@ Invoke-WebRequest -Uri "http://localhost:9000/mock/add_message" `
 | `/api/send_image` | POST | 发送图片（支持 JSON body 传 `file_path`，或 multipart/form-data 上传文件） |
 | `/api/send_audio` | POST | 发送音频（JSON body 传 `file_path` + `voice_length`） |
 | `/api/refresh` | POST | 刷新会话（重新读取 tokens.json 或重新登录） |
+| `/api/config/reload` | POST | 热重载 `config.json`（无需重启；重新应用日志级别，API Key/长消息策略/拆分正则/mock 路由即时生效） |
 | `/api/execute` | POST | 执行命令（白名单限制，仅允许 `getpass`、`发送音乐` 前缀） |
 
 ### 长消息处理（`/api/send`）

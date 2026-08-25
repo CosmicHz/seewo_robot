@@ -13,8 +13,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from init import config
 
-API_KEY = config.get("api_key", "your-secret-key")
-BASE_URL = f"http://127.0.0.1:{config.get('api_port', 5001)}"
+API_KEY = config.api_key
+BASE_URL = f"http://127.0.0.1:{config.api_port}"
 HEADERS = {"X-API-Key": API_KEY, "Content-Type": "application/json"}
 
 

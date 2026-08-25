@@ -9,8 +9,8 @@ import requests
 
 from init import config
 
-DEFAULT_API_KEY = config.get("api_key", "your-secret-key")
-DEFAULT_API_URL = f"http://localhost:{config.get('api_port', 5001)}"
+DEFAULT_API_KEY = config.api_key
+DEFAULT_API_URL = f"http://localhost:{config.api_port}"
 
 
 class SeewoClient:

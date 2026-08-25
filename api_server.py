@@ -14,7 +14,7 @@ import threading
 from flask import Flask, request, jsonify
 from functools import wraps
 
-from init import qrcode_file, token_file, config
+from init import qrcode_file, token_file, config, reload_config
 from login import acc, download_qrcode, check_qrcode
 from funcs import write_file
 from stu import stu
@@ -24,14 +24,23 @@ from message_service import MessageDataSource
 
 app = Flask(__name__)
 
+logger = logging.getLogger("seewo.server")
+
+
+def _apply_log_level():
+    """按当前 config.log_level 设置根/本模块日志级别（热重载时调用）"""
+    level = getattr(logging, config.log_level.upper(), logging.INFO)
+    logging.getLogger().setLevel(level)
+    logger.setLevel(level)
+
+
 # 日志配置
-LOG_LEVEL = getattr(logging, config.get("log_level", "INFO").upper(), logging.INFO)
 logging.basicConfig(
-    level=LOG_LEVEL,
+    level=getattr(logging, config.log_level.upper(), logging.INFO),
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%H:%M:%S",
 )
-logger = logging.getLogger("seewo.server")
+_apply_log_level()
 
 # 静默 Flask/Werkzeug 默认日志
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
@@ -48,49 +57,48 @@ def log_response(response):
     return response
 
 
-API_KEY = config.get("api_key", "your-secret-key")
-API_PORT = config.get("api_port", 5001)
-API_HOST = config.get("api_host", "0.0.0.0")
-
 # 长消息处理策略：truncate=截断为199字(默认) / split=拆分多条发送
 # 注：希沃服务器对单条留言强制200字硬上限，超长返回 statusCode=40000
 # 仅影响 api_server 路径；main.py 自有硬编码截断，不读此项
-LONG_MSG_STRATEGY = config.get("long_message_strategy", "truncate")
 MSG_MAX_LEN = 199
 
-# 长消息拆分模式：按正则匹配点智能拆分，匹配到的字符跟到后段开头（不丢失）
-# 默认 \r?\n —— 在 CRLF(Windows) 或 LF(Unix) 之前切割，换行符整体跟到下一段开头，
-# 不会把 \r 与 \n 拆散到两段。空字符串 = 禁用智能拆分，回退到硬切 MSG_MAX_LEN 字符
-# 仅影响 api_server 路径的 split 策略；main.py 不读此项
-LONG_MSG_SPLIT_PATTERN = config.get("long_message_split_pattern", r"\r?\n")
-_SPLIT_REGEX = None
-if LONG_MSG_SPLIT_PATTERN:
+
+def _compile_split_regex():
+    """长消息拆分正则：按当前 config.long_message_split_pattern 编译。
+
+    空字符串 = 禁用智能拆分，回退到硬切 MSG_MAX_LEN 字符；编译失败记 warning 并回退。
+    每次即时编译，使热重载改动的 pattern 即时生效。
+    """
+    pattern = config.long_message_split_pattern
+    if not pattern:
+        return None
     try:
-        _SPLIT_REGEX = re.compile(LONG_MSG_SPLIT_PATTERN)
+        return re.compile(pattern)
     except re.error as e:
         logger.warning(
             "long_message_split_pattern 编译失败，回退硬切: %s (pattern=%r)",
             e,
-            LONG_MSG_SPLIT_PATTERN,
+            pattern,
         )
-        _SPLIT_REGEX = None
+        return None
 
 
 def _split_long_message(content: str, max_len: int = MSG_MAX_LEN) -> list:
-    """按 _SPLIT_REGEX 智能拆分长消息
+    """按 config.long_message_split_pattern 智能拆分长消息
 
     - 在每段前 max_len 字符范围内，找最后一个正则匹配点，在匹配点之前切割；
       匹配到的字符（如换行符）跟到下一段开头，不丢失。
     - 无匹配点、或唯一匹配落在段首会导致空段时，回退到硬切 max_len 字符。
-    - _SPLIT_REGEX 为 None（配置禁用或编译失败）时，全程硬切 max_len 字符。
+    - 正则被禁用或编译失败（_compile_split_regex 返回 None）时，全程硬切。
     """
+    regex = _compile_split_regex()
     chunks = []
     rest = content
     while len(rest) > max_len:
         cut = 0
-        if _SPLIT_REGEX is not None:
+        if regex is not None:
             # 在前 max_len 字符范围内取最后一个 start>0 的匹配，避免空段
-            for m in _SPLIT_REGEX.finditer(rest, 0, max_len):
+            for m in regex.finditer(rest, 0, max_len):
                 if m.start() > 0:
                     cut = m.start()
         if cut == 0:
@@ -108,7 +116,7 @@ def require_api_key(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         key = request.headers.get("X-API-Key") or request.args.get("api_key")
-        if key != API_KEY:
+        if key != config.api_key:
             return jsonify({"error": "Unauthorized", "message": "Invalid API key"}), 401
         return f(*args, **kwargs)
 
@@ -333,7 +341,7 @@ def send_message():
     try:
         data = request.get_json()
         content = data.get("content", "")
-        strategy = data.get("strategy") or LONG_MSG_STRATEGY
+        strategy = data.get("strategy") or config.long_message_strategy
 
         if not content:
             return jsonify({"status": "error", "message": "content is required"}), 400
@@ -588,6 +596,31 @@ def refresh_session():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@app.route("/api/config/reload", methods=["POST"])
+@require_api_key
+def reload_config_api():
+    """热重载 config.json：重新读取并原地更新全局 config，重应用日志级别。
+
+    生效项：API Key、长消息策略/拆分正则、日志级别、mock 路由等所有
+    读取 config.<字段> 的运行时逻辑（含 mock 模式的 api/云班 URL 路由）。
+    """
+    try:
+        reload_config()
+        _apply_log_level()
+        return jsonify(
+            {
+                "status": "ok",
+                "message": "配置已热重载",
+                "use_mock": config.use_mock,
+                "mock_port": config.mock_port,
+                "log_level": config.log_level,
+                "long_message_strategy": config.long_message_strategy,
+            }
+        )
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route("/api/execute", methods=["POST"])
 @require_api_key
 def execute_command():
@@ -621,13 +654,13 @@ if __name__ == "__main__":
     print("=" * 50)
     print("希沃班牌机器人 API 服务")
     print("=" * 50)
-    print(f"API Key: {API_KEY}")
-    print(f"端口: {API_PORT}")
-    print(f"主机: {API_HOST}")
-    if config.get("use_mock"):
-        print(f"[MOCK] 已启用 -> localhost:{config.get('mock_port', 9000)}")
+    print(f"API Key: {config.api_key}")
+    print(f"端口: {config.api_port}")
+    print(f"主机: {config.api_host}")
+    if config.use_mock:
+        print(f"[MOCK] 已启用 -> localhost:{config.mock_port}")
     else:
         print("[MOCK] 未启用，连接真实服务器")
     print("=" * 50)
 
-    app.run(host=API_HOST, port=API_PORT, debug=False)
+    app.run(host=config.api_host, port=config.api_port, debug=False)

@@ -12,9 +12,8 @@ from init import config, verify
 
 def _get_yunban_base():
     """获取云班 API 基础 URL（支持 mock 模式）"""
-    if config.get("use_mock"):
-        port = config.get("mock_port", 9000)
-        return f"http://localhost:{port}/mis-cloud-route-server"
+    if config.use_mock:
+        return f"http://localhost:{config.mock_port}/mis-cloud-route-server"
     return "https://campus.seewo.com/mis-cloud-route-server"
 
 

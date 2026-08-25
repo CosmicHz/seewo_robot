@@ -18,12 +18,6 @@ from upload import Upload
 from yunban import getpass
 from init import config
 
-# 轮询配置：批量大小、基础间隔、最大间隔、连续错误上限
-POLL_BATCH_SIZE = config.get("poll_batch_size", 50)
-BASE_INTERVAL = config.get("base_interval", 1)
-MAX_INTERVAL = config.get("max_interval", 10)
-MAX_ERRORS = config.get("max_errors", 5)
-
 account = acc()
 if account.token_expired:  # 超过最大重试次数，登录失败
     print("登录失败，请重试")
@@ -135,20 +129,22 @@ def main():
 
     last_msg = " "
     consecutive_errors = 0
-    current_interval = BASE_INTERVAL
+    current_interval = config.base_interval
 
     while True:
         time.sleep(current_interval)
 
         try:
             # 直接获取 result，按时间倒序（新→旧）
-            result = stu_msg.get(POLL_BATCH_SIZE).result
+            result = stu_msg.get(config.poll_batch_size).result
             consecutive_errors = 0
         except Exception as err:
             consecutive_errors += 1
-            log = f"[ERROR] 获取消息失败({consecutive_errors}/{MAX_ERRORS}): {err}"
+            log = (
+                f"[ERROR] 获取消息失败({consecutive_errors}/{config.max_errors}): {err}"
+            )
             logw(log)
-            if consecutive_errors >= MAX_ERRORS:
+            if consecutive_errors >= config.max_errors:
                 try:
                     reconnect()
                     consecutive_errors = 0
@@ -164,11 +160,11 @@ def main():
         if not new_ids:
             last_msg = " "
             # 无新消息时逐步增加轮询间隔
-            current_interval = min(current_interval + 0.5, MAX_INTERVAL)
+            current_interval = min(current_interval + 0.5, config.max_interval)
             continue
 
         # 有新消息，重置轮询间隔
-        current_interval = BASE_INTERVAL
+        current_interval = config.base_interval
 
         # 逐条处理新消息（从旧到新）
         # 反转 new_ids 使其按时间正序（旧→新）

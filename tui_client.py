@@ -14,8 +14,8 @@ from textual.reactive import reactive
 
 from init import config
 
-API_KEY = config.get("api_key", "your-secret-key")
-API_URL = f"http://localhost:{config.get('api_port', 5001)}"
+API_KEY = config.api_key
+API_URL = f"http://localhost:{config.api_port}"
 
 
 class CheckMark(Checkbox):

@@ -10,6 +10,8 @@ import time
 import json
 import os
 
+from models import Config
+
 # 项目根目录：基于 __file__ 锚定，使状态文件不依赖进程当前工作目录
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -22,18 +24,37 @@ def project_path(name: str) -> str:
 CONFIG_FILE = project_path("config.json")
 
 
-def load_config() -> dict:
-    """加载配置文件，失败时返回空字典"""
+def load_config() -> Config:
+    """加载配置文件，失败或缺文件时返回默认 Config"""
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            if isinstance(data, dict):
+                return Config.from_dict(data)
         except (json.JSONDecodeError, OSError):
             pass
-    return {}
+    return Config()
 
 
-# 全局配置字典（只读使用，不要修改）
+def reload_config() -> Config:
+    """重新读取 config.json，原地更新全局 config 并重导派生 mock 常量。
+
+    必须用 setattr 原地更新同一个 config 对象（而非重新绑定变量），
+    否则已执行 `from init import config` 的模块仍引用旧对象，看不到热重载。
+    返回更新后的 config。
+    """
+    cfg = load_config()
+    for field_name in cfg.__dataclass_fields__:
+        setattr(config, field_name, getattr(cfg, field_name))
+    global _use_mock, _mock_port, _mock_base
+    _use_mock = config.use_mock
+    _mock_port = config.mock_port
+    _mock_base = f"http://localhost:{_mock_port}"
+    return config
+
+
+# 全局配置对象（可变；reload_config 会原地更新，消费方请读 config.<字段>）
 config = load_config()
 
 # 二维码图片保存路径（登录时生成）
@@ -47,8 +68,8 @@ if not os.path.isfile(uploads_file):
         f.write(b"{}")
 
 # Mock 模式相关（从 config 读取）
-_use_mock = config.get("use_mock", False)
-_mock_port = config.get("mock_port", 9000)
+_use_mock = config.use_mock
+_mock_port = config.mock_port
 _mock_base = f"http://localhost:{_mock_port}"
 
 # HTTP 代理配置，空字典表示不使用代理

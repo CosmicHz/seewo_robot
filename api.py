@@ -10,9 +10,8 @@ logger = logging.getLogger("seewo.api")
 
 def _get_api_base():
     """获取 m-campus API 基础 URL（支持 mock 模式）"""
-    if config.get("use_mock"):
-        port = config.get("mock_port", 9000)
-        return f"http://localhost:{port}"
+    if config.use_mock:
+        return f"http://localhost:{config.mock_port}"
     return "https://m-campus.seewo.com"
 
 
