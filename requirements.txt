@@ -4,19 +4,17 @@ certifi==2026.7.22
     # via requests
 charset-normalizer==3.5.1
     # via requests
-click==8.4.2
+click==8.5.0
     # via flask
-colorama==0.4.6
-    # via click
 flask==3.1.2
     # via seewo-robot (pyproject.toml)
-idna==3.19
+idna==3.20
     # via requests
 itsdangerous==2.2.0
     # via flask
 jinja2==3.1.6
     # via flask
-linkify-it-py==2.1.0
+linkify-it-py==2.2.0
     # via markdown-it-py
 markdown-it-py==4.2.0
     # via
@@ -34,12 +32,14 @@ mdurl==0.1.2
     # via markdown-it-py
 pillow==12.3.0
     # via seewo-robot (pyproject.toml)
-platformdirs==4.11.3
+platformdirs==4.11.12
     # via textual
 pygments==2.21.0
     # via
     #   rich
     #   textual
+pyperclip==1.11.0
+    # via seewo-robot (pyproject.toml)
 requests==2.34.2
     # via
     #   requests-toolbelt
@@ -54,9 +54,7 @@ textual==8.2.8
     # via seewo-robot (pyproject.toml)
 typing-extensions==4.16.0
     # via textual
-uc-micro-py==2.0.0
-    # via linkify-it-py
-urllib3==2.7.0
+urllib3==2.8.0
     # via requests
 werkzeug==3.1.8
     # via flask

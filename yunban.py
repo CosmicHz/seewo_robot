@@ -8,6 +8,13 @@ from datetime import datetime, date, timedelta
 from login import acc
 from api import api
 from init import config, verify
+from models import (
+    YunbanClass,
+    YunbanStudent,
+    YunbanEvent,
+    YunbanParent,
+    YunbanNotesPage,
+)
 
 
 def _get_yunban_base():
@@ -29,12 +36,12 @@ def getpass(account: acc, schoolUid, snCode, time, classUid=""):
 
 
 def getpass2():
-    import pandas.io.clipboard as cb
+    import pyperclip
 
     account = acc()
     while True:
         url: str
-        url = cb.paste()
+        url = pyperclip.paste()
         if url.startswith("https://id.seewo.com/"):
             snCode = url.split("snCode%3D")[1].split("%26")[0]
             timestamp = url.split("timestamp%3D")[1].split("%26")[0]
@@ -55,54 +62,95 @@ class yunban:
             "Cookie": f"acw_tc={self.token}",
         }
 
-    def getclasslist(self):
-        """获取学校下所有班级列表"""
+    def getclasslist(self) -> list[YunbanClass]:
+        """获取学校下所有班级列表。
+
+        uid 为该班唯一标识，roomUid 绑定教室
+        多个班可能共享同一 `roomUid`（含空串，表示未绑定实教室），
+        """
         base = _get_yunban_base()
         url = f"{base}/api/classmember/v1/school/{self.schoolid}/classes"
         response = requests.request("GET", url, headers=self.headers, verify=verify)
-        return response.json()["data"]
+        return [YunbanClass.from_dict(c) for c in response.json()["data"]]
 
-    def getnotes(self, uid, parentuid, num, size=1):
+    def getnotes(self, uid, parentuid, num, size=1) -> YunbanNotesPage:
+        """获取某个孩子(child uid=uid)给指定家长(parentuid)的留言，分页。
+
+        `num` 为页码，从 1 开始
+        `size` 每页条数。`result` 为 `list[YunbanNote]` 消息列表，无数据时 `totalCount=0`。HTTP 200。
+        """
         base = _get_yunban_base()
         url = f"{base}/api/kidnote/v4/parent/{parentuid}/child/{uid}/notes?start={num}&pageSize={size}"
         response = requests.request("GET", url, headers=self.headers, verify=verify)
-        return response.json()["data"]
+        return YunbanNotesPage.from_dict(response.json()["data"])
 
-    def getparents(self, uid):
+    def getparents(self, uid) -> list[YunbanParent]:
+        """获取某个孩子绑定的家长列表。"""
         base = _get_yunban_base()
         url = f"{base}/api/kidnote/v1/{uid}/parent/note/count"
         response = requests.request("GET", url, headers=self.headers, verify=verify)
-        return response.json()["data"]
+        return [YunbanParent.from_dict(p) for p in response.json()["data"]]
 
-    def getstulist(self, classid):
+    def getstulist(self, classid) -> list[YunbanStudent]:
+        """获取某个班级的学生列表，返回 `list[YunbanStudent]`。
+
+        学生字段含 name/sid/uid/性别/卡号列表等，gender: 0未知 1男 2女；
+        注意某些字段并非每个学生都存在（如卡号/头像可能为空串）；
+        """
         base = _get_yunban_base()
         url = f"{base}/api/classmember/v1/school/{self.schoolid}/students?classUids={classid}"
         response = requests.request("GET", url, headers=self.headers, verify=verify)
-        return response.json()["data"][0]["students"]
+        return [
+            YunbanStudent.from_dict(s) for s in response.json()["data"][0]["students"]
+        ]
 
-    def searchstubyname(self, stuname, students):
+    def searchstubyname(
+        self, stuname, students: list[YunbanStudent]
+    ) -> YunbanStudent | None:
+        """按学生姓名精确查找（线性扫描 students 列表），返回 `YunbanStudent`。
+
+        找不到返回 `None`。
+        """
         for stu in students:
-            if stu["name"] == stuname:
+            if stu.name == stuname:
                 return stu
-        return {}
+        return None
 
-    def searchstubyuid(self, stuname, students):
+    def searchstubyuid(
+        self, stuname, students: list[YunbanStudent]
+    ) -> YunbanStudent | None:
+        """按学生 uid 精确查找（线性扫描 students 列表），返回 `YunbanStudent`。
+
+        找不到返回 `None`。
+        """
         for stu in students:
-            if stu["uid"] == stuname:
+            if stu.uid == stuname:
                 return stu
-        return {}
+        return None
 
-    def getevents(self, roomUid):
+    def getevents(self, roomUid) -> list[YunbanEvent]:
+        """获取某个教室(roomUid)的考勤事件列表，返回 `list[YunbanEvent]`。
+
+        走 `/api/attendance/v3/{schoolid}/events?roomUid={roomUid}`。
+        事件字段含 name/eventId/memberType/起止时间/周期/绑班(classes)/班牌时段(config)等；
+        **多班共享同一 roomUid 时结果相同；无事件返回 `[]`。**
+        """
         base = _get_yunban_base()
         url = f"{base}/api/attendance/v3/{self.schoolid}/events?roomUid={roomUid}"
         response = requests.request("GET", url, headers=self.headers, verify=verify)
-        return response.json()["data"]
+        return [YunbanEvent.from_dict(e) for e in response.json()["data"]]
 
     # Get time from events
 
-    def geteventtime(self, event):
+    def geteventtime(self, event: YunbanEvent) -> tuple[str, str]:
+        """解析考勤事件的班牌展示时段，返回 (开始, 结束) 字符串。
+
+        从 `event.config`（JSON 字符串）取 `banPaiConfig.topStartTime` 与
+        `topEndTime`，形如 ("06:40", "07:20")，代表班牌上允许显示考勤的时间窗，
+        与实际考勤起止（startTime/endTime）不一定相同。
+        """
         config = json.loads(
-            event["config"]
+            event.config
         )  # '{"banPaiConfig": {"topEndTime": "07:20", "topStartTime": "06:16"}}'
         return config["banPaiConfig"]["topStartTime"], config["banPaiConfig"][
             "topEndTime"
@@ -156,22 +204,27 @@ class yunban:
         # 格式化输出（秒会自动四舍五入到整数）
         return random_dt.strftime("%H:%M:%S")
 
-    def randomtime(self, event):
+    def randomtime(self, event: YunbanEvent) -> str:
+        """生成签到用随机时间字符串 "HH:MM:SS"。
+
+        在班牌时段起点（`geteventtime` 的 topStartTime）与事件 `endTime` 之间
+        随机取一个时刻，用于自动签到时伪装真实的签到时间。
+        """
         # datenow=time.strftime('%Y-%m-%d', time.localtime())
         start = self.geteventtime(event)[0]
-        end = event["endTime"]
+        end = event.endTime
         return self.random_time_in_range(start, end)
 
-    def attend(self, name, uid, sid, event, date, time, classUid, roomUid):
+    def attend(self, name, uid, sid, event: YunbanEvent, date, time, classUid, roomUid):
         payload = {
             "attendanceData": [
                 {
-                    "eventId": event["eventId"],
+                    "eventId": event.eventId,
                     "eventVersion": 1,
                     "attendanceType": 1,
                     "forwardEventType": 10,
                     "eventStartTime": self.geteventtime(event)[0],
-                    "eventAttendTime": event["endTime"],
+                    "eventAttendTime": event.endTime,
                     "eventEndTime": self.geteventtime(event)[1],
                     "classUid": classUid,
                     "attendanceDate": date,
