@@ -135,3 +135,347 @@ class MessageResponse:
             message=d.get("message", ""),
             result=[RawMessage.from_dict(m) for m in d.get("result", [])],
         )
+
+
+# ---------------------------------------------------------------------------
+# yunban 数据模型：云班接口的返回结构。
+# frozen + slots，只读；from_dict 用 .get 兜底；extra 保留未被建模的原始字段，
+# 避免模型化丢失服务端新增/未知字段（跨进程边界用 dataclasses.asdict 转 dict）。
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class YunbanClass:
+    """云班班级（getclasslist 返回的列表元素）。
+
+    实测完整字段：uid/name/roomUid/roomName/description + schoolUid/schoolName/schoolType；
+    多个班可共享同一 roomUid（含空串，表示未绑定实教室）。
+    """
+
+    uid: str = ""
+    name: str = ""
+    roomUid: str = ""
+    roomName: str = ""
+    description: str = ""
+    schoolUid: str = ""
+    schoolName: str = ""
+    schoolType: str = ""
+    extra: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "YunbanClass":
+        return cls(
+            uid=d.get("uid", ""),
+            name=d.get("name", ""),
+            roomUid=d.get("roomUid", ""),
+            roomName=d.get("roomName", ""),
+            description=d.get("description", ""),
+            schoolUid=d.get("schoolUid", ""),
+            schoolName=d.get("schoolName", ""),
+            schoolType=d.get("schoolType", ""),
+            extra={k: v for k, v in d.items() if k not in cls._known},
+        )
+
+    _known = {
+        "uid",
+        "name",
+        "roomUid",
+        "roomName",
+        "description",
+        "schoolUid",
+        "schoolName",
+        "schoolType",
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class YunbanStudent:
+    """云班学生（getstulist 返回的列表元素）。
+
+    注意：字段并非每个学生都存在（如 extendCardIds / headImageUrl 可能为空），
+    gender 语义：0 未知、1 男、2 女。
+    """
+
+    name: str = ""
+    sid: str = ""
+    uid: str = ""
+    classUid: str = ""
+    gender: int = 0
+    headImageUrl: str = ""
+    extendCardIds: list[str] = field(default_factory=list)
+    ucPassword: str = ""
+    extra: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "YunbanStudent":
+        return cls(
+            name=d.get("name", ""),
+            sid=d.get("sid", ""),
+            uid=d.get("uid", ""),
+            classUid=d.get("classUid", ""),
+            gender=d.get("gender", 0),
+            headImageUrl=d.get("headImageUrl", ""),
+            extendCardIds=list(d.get("extendCardIds", []) or []),
+            ucPassword=d.get("ucPassword", ""),
+            extra={k: v for k, v in d.items() if k not in cls._known},
+        )
+
+    _known = {
+        "name",
+        "sid",
+        "uid",
+        "classUid",
+        "gender",
+        "headImageUrl",
+        "extendCardIds",
+        "ucPassword",
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class YunbanEvent:
+    """云班考勤事件（getevents 返回的列表元素）。
+
+    config 是 JSON 字符串，含班牌时段 banPaiConfig(topStartTime/topEndTime)；
+    classes 是绑定的班级列表（元素为 {"className", "classUid"}）。
+    多班共享同一 roomUid 时事件列表相同。
+    """
+
+    name: str = ""
+    eventId: str = ""
+    eventVersion: int = 0
+    memberType: int = 0
+    userType: str = ""
+    attendanceType: int = 0
+    startTime: str = ""
+    endTime: str = ""
+    overTime: str = ""
+    delayMinute: int = 0
+    cycleType: int = 0
+    cycleContent: str = ""
+    config: str = ""
+    classes: list = field(default_factory=list)
+    schoolCode: str = ""
+    creator: str = ""
+    classId: str = ""
+    className: str = ""
+    isRoomBaseOnClass: bool = False
+    attendanceStudents: list = field(default_factory=list)
+    attendanceTeachers: list = field(default_factory=list)
+    extra: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "YunbanEvent":
+        return cls(
+            name=d.get("name", ""),
+            eventId=d.get("eventId", ""),
+            eventVersion=d.get("eventVersion", 0),
+            memberType=d.get("memberType", 0),
+            userType=d.get("userType", ""),
+            attendanceType=d.get("attendanceType", 0),
+            startTime=d.get("startTime", ""),
+            endTime=d.get("endTime", ""),
+            overTime=d.get("overTime", ""),
+            delayMinute=d.get("delayMinute", 0),
+            cycleType=d.get("cycleType", 0),
+            cycleContent=d.get("cycleContent", ""),
+            config=d.get("config", ""),
+            classes=list(d.get("classes", []) or []),
+            schoolCode=d.get("schoolCode", ""),
+            creator=d.get("creator", ""),
+            classId=d.get("classId", ""),
+            className=d.get("className", ""),
+            isRoomBaseOnClass=d.get("isRoomBaseOnClass", False),
+            attendanceStudents=list(d.get("attendanceStudents", []) or []),
+            attendanceTeachers=list(d.get("attendanceTeachers", []) or []),
+            extra={k: v for k, v in d.items() if k not in cls._known},
+        )
+
+    _known = {
+        "name",
+        "eventId",
+        "eventVersion",
+        "memberType",
+        "userType",
+        "attendanceType",
+        "startTime",
+        "endTime",
+        "overTime",
+        "delayMinute",
+        "cycleType",
+        "cycleContent",
+        "config",
+        "classes",
+        "schoolCode",
+        "creator",
+        "classId",
+        "className",
+        "isRoomBaseOnClass",
+        "attendanceStudents",
+        "attendanceTeachers",
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class YunbanParent:
+    """云班家长（getparents 返回的列表元素）。
+
+    bindWx 是布尔，表示是否绑定了微信；
+    parentShowIndex 是该家长在孩子侧的关系位（第几个家长）。
+    """
+
+    parentName: str = ""
+    parentPhone: str = ""
+    parentUserUid: str = ""
+    parentShowIndex: int = 0
+    bindWx: bool = False
+    notReadNoteCount: int = 0
+    tipsMessage: str = ""
+    parentHeadImage: str = ""
+    extra: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "YunbanParent":
+        return cls(
+            parentName=d.get("parentName", ""),
+            parentPhone=d.get("parentPhone", ""),
+            parentUserUid=d.get("parentUserUid", ""),
+            parentShowIndex=d.get("parentShowIndex", 0),
+            bindWx=d.get("bindWx", False),
+            notReadNoteCount=d.get("notReadNoteCount", 0),
+            tipsMessage=d.get("tipsMessage", ""),
+            parentHeadImage=d.get("parentHeadImage", ""),
+            extra={k: v for k, v in d.items() if k not in cls._known},
+        )
+
+    _known = {
+        "parentName",
+        "parentPhone",
+        "parentUserUid",
+        "parentShowIndex",
+        "bindWx",
+        "notReadNoteCount",
+        "tipsMessage",
+        "parentHeadImage",
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class YunbanNote:
+    """云班留言（getnotes 返回的 result 元素）。
+
+    双向往返：sender(某人)→receiver(孩子)、孩子→家长时 sender/receiver 互换；
+    status 语义：2 未读、3 已读。多媒体类型（图片/音频等）走 resUrl / voiceUrl。
+    字段并非每条都存在，用 .get 兜底。
+    """
+
+    id: str = ""
+    content: str = ""
+    type: int = 0
+    status: int = 0
+    isFeedback: int = 0
+    isIllegal: int = 0
+    senderUid: str = ""
+    senderName: str = ""
+    receiverUid: str = ""
+    receiverName: str = ""
+    senderHeadImage: str = ""
+    receiverHeadImage: str = ""
+    classUid: str = ""
+    schoolUid: str = ""
+    sendTime: int = 0
+    createTime: int = 0
+    updateTime: int = 0
+    resUrl: str = ""
+    voiceUrl: str = ""
+    voiceLength: int = 0
+    resFileKey: str = ""
+    replies: list = field(default_factory=list)
+    options: list = field(default_factory=list)
+    tips: str = ""
+    receiverTips: str = ""
+    callStatus: int = 0
+    callTime: int = 0
+    extra: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "YunbanNote":
+        return cls(
+            id=str(d.get("id", "")),
+            content=d.get("content", ""),
+            type=d.get("type", 0),
+            status=d.get("status", 0),
+            isFeedback=d.get("isFeedback", 0),
+            isIllegal=d.get("isIllegal", 0),
+            senderUid=d.get("senderUid", ""),
+            senderName=d.get("senderName", ""),
+            receiverUid=d.get("receiverUid", ""),
+            receiverName=d.get("receiverName", ""),
+            senderHeadImage=d.get("senderHeadImage", ""),
+            receiverHeadImage=d.get("receiverHeadImage", ""),
+            classUid=d.get("classUid", ""),
+            schoolUid=d.get("schoolUid", ""),
+            sendTime=d.get("sendTime", 0),
+            createTime=d.get("createTime", 0),
+            updateTime=d.get("updateTime", 0),
+            resUrl=d.get("resUrl", ""),
+            voiceUrl=d.get("voiceUrl", ""),
+            voiceLength=d.get("voiceLength", 0),
+            resFileKey=d.get("resFileKey", ""),
+            replies=list(d.get("replies", []) or []),
+            options=list(d.get("options", []) or []),
+            tips=d.get("tips", ""),
+            receiverTips=d.get("receiverTips", ""),
+            callStatus=d.get("callStatus", 0),
+            callTime=d.get("callTime", 0),
+            extra={k: v for k, v in d.items() if k not in cls._known},
+        )
+
+    _known = {
+        "id",
+        "content",
+        "type",
+        "status",
+        "isFeedback",
+        "isIllegal",
+        "senderUid",
+        "senderName",
+        "receiverUid",
+        "receiverName",
+        "senderHeadImage",
+        "receiverHeadImage",
+        "classUid",
+        "schoolUid",
+        "sendTime",
+        "createTime",
+        "updateTime",
+        "resUrl",
+        "voiceUrl",
+        "voiceLength",
+        "resFileKey",
+        "replies",
+        "options",
+        "tips",
+        "receiverTips",
+        "callStatus",
+        "callTime",
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class YunbanNotesPage:
+    """云班留言分页（getnotes 返回的 data 结构）。"""
+
+    page: int = 0
+    pageSize: int = 0
+    totalCount: int = 0
+    result: list[YunbanNote] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "YunbanNotesPage":
+        return cls(
+            page=d.get("page", 0),
+            pageSize=d.get("pageSize", 0),
+            totalCount=d.get("totalCount", 0),
+            result=[YunbanNote.from_dict(m) for m in d.get("result", [])],
+        )
