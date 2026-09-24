@@ -83,6 +83,7 @@ class MockData:
         self.messages = []  # 留言列表
         self.uploads = {}  # fileId -> {downloadUrl, filename, uploadTime}
         self.events = []  # 考勤事件
+        self.parents = {}  # child_uid -> list[parent]
         self._next_msg_id = 1000
         self._init_defaults()
 
@@ -92,36 +93,91 @@ class MockData:
         self.users[parent_uid] = {
             "userId": parent_uid,
             "token": "mock_token_parent_001",
-            "name": "测试家长",
+            "name": "某人",
             "type": "parent",
         }
 
-        student_uid = "mock_student_001"
         school_uid = "mock_school_001"
-        class_uid = "mock_class_001"
-        self.students[student_uid] = {
-            "schoolUid": school_uid,
-            "classUid": class_uid,
-            "userUid": student_uid,
-            "realName": "测试学生",
-            "name": "测试学生",
-            "uid": student_uid,
-            "sid": "S001",
+        school_name = "测试学校"
+        class_a = "mock_class_001"  # 测试班A
+        class_b = "mock_class_002"  # 测试班B（绑教室）
+        room_a = "mock_room_001"
+        room_b = "mock_room_002"
+
+        self.students = {
+            "mock_student_001": {
+                "schoolUid": school_uid,
+                "classUid": class_a,
+                "userUid": "mock_student_001",
+                "realName": "测试学生",
+                "name": "测试学生",
+                "uid": "mock_student_001",
+                "sid": "S001",
+                "gender": 1,
+                "headImageUrl": "",
+                "ucPassword": "",
+                "extendCardIds": [],
+            },
+            "mock_student_002": {
+                "schoolUid": school_uid,
+                "classUid": class_b,
+                "userUid": "mock_student_002",
+                "realName": "测试学生乙",
+                "name": "测试学生乙",
+                "uid": "mock_student_002",
+                "sid": "S002",
+                "gender": 0,
+                "headImageUrl": "http://localhost:9000/upload/files/mock/head.png",
+                "ucPassword": "",
+                "extendCardIds": ["DEADBEEF"],
+            },
         }
 
-        self.classes[class_uid] = {
-            "uid": class_uid,
-            "name": "测试班级",
-            "roomUid": "mock_room_001",
-            "schoolUid": school_uid,
+        self.classes = {
+            class_a: {
+                "uid": class_a,
+                "name": "测试班A",
+                "roomUid": room_a,
+                "roomName": "",
+                "description": "",
+                "schoolUid": school_uid,
+                "schoolName": school_name,
+                "schoolType": "schoolType",
+            },
+            class_b: {
+                "uid": class_b,
+                "name": "测试班B",
+                "roomUid": room_b,
+                "roomName": "",
+                "description": "",
+                "schoolUid": school_uid,
+                "schoolName": school_name,
+                "schoolType": "schoolType",
+            },
+        }
+
+        # 孩子 uid -> list[parents]（对齐 YunbanParent）
+        self.parents = {
+            "mock_student_002": [
+                {
+                    "parentUserUid": parent_uid,
+                    "parentName": "某人",
+                    "parentPhone": "13800000000",
+                    "parentShowIndex": 1,
+                    "bindWx": True,
+                    "notReadNoteCount": 0,
+                    "parentHeadImage": "",
+                    "tipsMessage": "",
+                }
+            ],
         }
 
         # 预置几条消息
         now = int(time.time() * 1000)
         self._add_message(
             school_uid,
-            class_uid,
-            student_uid,
+            class_a,
+            "mock_student_001",
             parent_uid,
             "student",
             1,
@@ -130,9 +186,9 @@ class MockData:
         )
         self._add_message(
             school_uid,
-            class_uid,
+            class_a,
             parent_uid,
-            student_uid,
+            "mock_student_001",
             "parent",
             1,
             "宝贝加油！放学我来接你",
@@ -140,36 +196,68 @@ class MockData:
         )
         self._add_message(
             school_uid,
-            class_uid,
-            student_uid,
+            class_b,
             parent_uid,
-            "student",
+            "mock_student_002",
+            "parent",
             1,
-            "好的！",
+            "今天有数学小测，记得认真作答。",
             now - 900000,
         )
 
-        # 考勤事件
+        # 考勤事件（对齐 YunbanEvent：name 而非 eventName）
         self.events = [
             {
                 "eventId": "event_morning",
-                "eventName": "早上签到",
-                "startTime": "06:00",
-                "endTime": "08:30",
-                "roomUid": "mock_room_001",
+                "eventVersion": 1,
+                "name": "2025全校上午考勤",
+                "memberType": 0,
+                "attendanceType": 1,
+                "userType": "student",
+                "startTime": "06:40",
+                "endTime": "07:30",
+                "overTime": "07:35",
+                "delayMinute": 10,
+                "cycleType": 0,
+                "cycleContent": "1,2,3,4,5",
+                "roomUid": room_b,
+                "isRoomBaseOnClass": True,
+                "classId": "",
+                "className": "",
+                "classes": [{"className": "测试班B", "classUid": class_b}],
                 "config": json.dumps(
-                    {"banPaiConfig": {"topStartTime": "06:00", "topEndTime": "08:30"}}
+                    {"banPaiConfig": {"topStartTime": "06:40", "topEndTime": "07:20"}}
                 ),
+                "attendanceStudents": [],
+                "attendanceTeachers": [],
+                "creator": "",
+                "schoolCode": "JE94",
             },
             {
                 "eventId": "event_afternoon",
-                "eventName": "下午签到",
+                "eventVersion": 1,
+                "name": "2025全校下午考勤",
+                "memberType": 0,
+                "attendanceType": 1,
+                "userType": "student",
                 "startTime": "13:00",
                 "endTime": "14:30",
-                "roomUid": "mock_room_001",
+                "overTime": "14:35",
+                "delayMinute": 10,
+                "cycleType": 0,
+                "cycleContent": "1,2,3,4,5",
+                "roomUid": room_b,
+                "isRoomBaseOnClass": True,
+                "classId": "",
+                "className": "",
+                "classes": [{"className": "测试班B", "classUid": class_b}],
                 "config": json.dumps(
-                    {"banPaiConfig": {"topStartTime": "13:00", "topEndTime": "14:30"}}
+                    {"banPaiConfig": {"topStartTime": "13:00", "topEndTime": "14:20"}}
                 ),
+                "attendanceStudents": [],
+                "attendanceTeachers": [],
+                "creator": "",
+                "schoolCode": "JE94",
             },
         ]
 
@@ -264,6 +352,7 @@ class MockData:
             "classes": self.classes,
             "messages": self.messages,
             "events": self.events,
+            "parents": self.parents,
             "_next_msg_id": self._next_msg_id,
         }
         with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -279,6 +368,7 @@ class MockData:
         self.classes = data.get("classes", self.classes)
         self.messages = data.get("messages", self.messages)
         self.events = data.get("events", self.events)
+        self.parents = data.get("parents", self.parents)
         self._next_msg_id = data.get("_next_msg_id", self._next_msg_id)
 
 
@@ -507,78 +597,158 @@ ACTION_HANDLERS = {
 
 
 # ============ 云班 API (campus.seewo.com/mis-cloud-route-server) ============
+# 对齐新发现：同接口跨 v1~v5 均存活（生产对版本号不敏感），此处用 <int:version> 通配。
+
+
+def _note_to_yunban(m):
+    """把内存留言转成 YunbanNote 结构（补 senderName/receiverName/status 等）"""
+    sender_name = (
+        mock_data.users.get(m["senderUid"], {}).get("name", "")
+        if m["senderType"] == "parent"
+        else mock_data.students.get(m["senderUid"], {}).get("realName", m["senderName"])
+    )
+    receiver_name = ""
+    if m["senderType"] == "parent":
+        receiver_name = mock_data.students.get(m["receiverUid"], {}).get("realName", "")
+    return {
+        "id": str(m["id"]),
+        "content": m["content"],
+        "type": m["type"],
+        "status": 3,
+        "isFeedback": 0,
+        "isIllegal": m.get("isIllegal", 0),
+        "senderUid": m["senderUid"],
+        "senderName": sender_name,
+        "receiverUid": m["receiverUid"],
+        "receiverName": receiver_name,
+        "senderHeadImage": "",
+        "receiverHeadImage": "",
+        "classUid": m["classUid"],
+        "schoolUid": m["schoolUid"],
+        "sendTime": m["createTime"],
+        "createTime": m["createTime"],
+        "updateTime": m["createTime"],
+        "resUrl": m.get("resUrl", ""),
+        "voiceUrl": "",
+        "voiceLength": m.get("voiceLength", 0),
+        "resFileKey": "",
+        "replies": [],
+        "options": [],
+        "tips": "",
+        "receiverTips": "",
+        "callStatus": 0,
+        "callTime": 0,
+    }
 
 
 @app.route(
-    "/mis-cloud-route-server/api/classmember/v1/school/<school_uid>/classes",
+    "/mis-cloud-route-server/api/classmember/v<int:version>/school/<school_uid>/classes",
     methods=["GET"],
 )
-def get_class_list(school_uid):
+def get_class_list(school_uid, version):
     """获取班级列表"""
     return jsonify({"data": list(mock_data.classes.values())})
 
 
 @app.route(
-    "/mis-cloud-route-server/api/kidnote/v4/parent/<parent_uid>/child/<child_uid>/notes",
+    "/mis-cloud-route-server/api/classmember/v<int:version>/school/<school_uid>/classes/<class_uid>",
     methods=["GET"],
 )
-def get_yunban_notes(parent_uid, child_uid):
-    """获取云班留言"""
+def get_class_detail(school_uid, class_uid, version):
+    """班级详情"""
+    cls = mock_data.classes.get(class_uid)
+    return jsonify({"data": cls}) if cls else (jsonify({"data": None}), 404)
+
+
+@app.route(
+    "/mis-cloud-route-server/api/kidnote/v<int:version>/parent/<parent_uid>/child/<child_uid>/notes",
+    methods=["GET"],
+)
+def get_yunban_notes(parent_uid, child_uid, version):
+    """获取云班留言，返回分页结构（对齐 YunbanNotesPage）"""
     start = int(request.args.get("start", 1))
     page_size = int(request.args.get("pageSize", 10))
     msgs = mock_data.get_messages(parent_uid, child_uid, start, page_size)
-    return jsonify({"data": msgs})
-
-
-@app.route(
-    "/mis-cloud-route-server/api/kidnote/v1/<uid>/parent/note/count",
-    methods=["GET"],
-)
-def get_parent_note_count(uid):
-    """获取家长留言计数"""
-    count = len(
+    result = [_note_to_yunban(m) for m in msgs]
+    total = len(
         [
             m
             for m in mock_data.messages
-            if m["receiverUid"] == uid or m["senderUid"] == uid
+            if (m["senderUid"] == parent_uid and m["receiverUid"] == child_uid)
+            or (m["senderUid"] == child_uid and m["receiverUid"] == parent_uid)
         ]
     )
-    return jsonify({"data": {"count": count}})
+    return jsonify(
+        {
+            "data": {
+                "page": start,
+                "pageSize": page_size,
+                "result": result,
+                "totalCount": total,
+            }
+        }
+    )
 
 
 @app.route(
-    "/mis-cloud-route-server/api/classmember/v1/school/<school_uid>/students",
+    "/mis-cloud-route-server/api/kidnote/v<int:version>/<uid>/parent/note/count",
     methods=["GET"],
 )
-def get_class_students(school_uid):
-    """获取班级学生列表"""
+def get_parent_note_count(uid, version):
+    """获取某个孩子绑定的家长列表（对齐 YunbanParent，含未读数）"""
+    return jsonify({"data": mock_data.parents.get(uid, [])})
+
+
+@app.route(
+    "/mis-cloud-route-server/api/kidnote/v<int:version>/parent/<parent_uid>/children",
+    methods=["GET"],
+)
+def get_parent_children(parent_uid, version):
+    """获取某家长关联的孩子"""
+    children = [s for s in mock_data.students.values() if s["classUid"]]
+    return jsonify({"data": children})
+
+
+@app.route(
+    "/mis-cloud-route-server/api/classmember/v<int:version>/school/<school_uid>/students",
+    methods=["GET"],
+)
+def get_class_students(school_uid, version):
+    """获取班级学生列表，按 classUids 过滤（对齐 YunbanStudent 结构）"""
     class_uids = request.args.get("classUids", "")
-    students = list(mock_data.students.values())
-    return jsonify({"data": [{"uid": class_uids, "students": students}]})
+    uids = [u for u in class_uids.split(",") if u]
+    students = [
+        s for s in mock_data.students.values() if (not uids) or s["classUid"] in uids
+    ]
+    return jsonify({"data": [{"classUid": class_uids, "students": students}]})
 
 
 @app.route(
-    "/mis-cloud-route-server/api/attendance/v3/<school_uid>/events",
+    "/mis-cloud-route-server/api/attendance/v<int:version>/<school_uid>/events",
     methods=["GET"],
 )
-def get_attendance_events(school_uid):
-    """获取考勤事件"""
-    return jsonify({"data": mock_data.events})
+def get_attendance_events(school_uid, version):
+    """获取考勤事件（可按 roomUid 过滤；对齐 YunbanEvent 结构）"""
+    room_uid = request.args.get("roomUid", "")
+    events = mock_data.events
+    if room_uid:
+        events = [e for e in events if e.get("roomUid") == room_uid]
+    return jsonify({"data": events})
 
 
 @app.route(
-    "/mis-cloud-route-server/api/attendance/v1/<school_uid>/data",
+    "/mis-cloud-route-server/api/attendance/v<int:version>/<school_uid>/data",
     methods=["POST"],
 )
-def submit_attendance(school_uid):
+def submit_attendance(school_uid, version):
     """提交考勤数据"""
     data = request.get_json(silent=True) or {}
     print(f"[ATTEND] 考勤: {json.dumps(data, ensure_ascii=False)[:200]}")
     return jsonify({"data": {"code": 0, "message": "签到成功"}})
 
 
-@app.route("/mis-cloud-route-server/api/kidnote/v1/note", methods=["POST"])
-def yunban_send_note():
+@app.route("/mis-cloud-route-server/api/kidnote/v<int:version>/note", methods=["POST"])
+def yunban_send_note(version):
     """云班直接发送留言"""
     data = request.get_json(silent=True) or {}
     content = data.get("content", "")
@@ -688,6 +858,7 @@ def mock_get_data():
             "messages_count": len(mock_data.messages),
             "messages": mock_data.messages,
             "events": mock_data.events,
+            "parents": mock_data.parents,
             "uploads": mock_data.uploads,
         }
     )
