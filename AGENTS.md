@@ -51,7 +51,18 @@ uv run python test/test_api.py    # 逐个测试所有 API 端点
 | [main.py](main.py) | 常驻轮询监听最新留言 + 处理 `/` 开头命令 + 自适应轮询间隔 + 断线重连 |
 | [send_msg.py](send_msg.py) | 一次性登录并发送一条文本 |
 | [upload_file.py](upload_file.py) | 一次性登录并上传文件至希沃云存储接口 |
-| [auto_attend.py](auto_attend.py) | 自动签到（**当前损坏**，见已知问题） |
+| [yunban_token.py](yunban_token.py) | 动态构建生产云班 `yunban` 实例（全局名 `yunban_client`）：不硬编码敏感信息，从现有登录会话推导 `acw_tc` cookie + schoolUid。其他 yunban 脚本依赖它 |
+| [auto_attend.py](auto_attend.py) | 自动签到（**粗糙，非生产级**：硬编码 `classlist[35]`，事件用 `events[1]` 无兜底会崩溃；已加 `__main__` 保护，其余运行时语义与 owner 原版一致） |
+
+### 云班工具脚本（复用 `yunban_token.yunban_client`，直连云班 REST）
+
+| 脚本 | 职责 |
+| --- | --- |
+| [yunban_cli.py](yunban_cli.py) | 云班命令行封装：`classes` / `student` / `events` / `eventtime` / `attend`（考勤）/ `roster` |
+| [yunban_tui.py](yunban_tui.py) | 基于 Textual 的云班 TUI：三列（班级 / 学生+事件 / 上一接口原始响应）+ 家长列表，选中出详情与操作按钮，接口结果自动持久化缓存并用 `r` 手动失效 |
+| [yunban_token.py](yunban_token.py) | 同上，动态构建 `yunban` 实例供上述脚本复用 |
+
+> 云班脚本需防风控：yunban.py 绕过 `request_manager`，一次成批取数/签到前务必自行 `time.sleep` 间隔。
 
 ### 路径 B：客户端-服务端（HTTP 中转）
 
@@ -109,7 +120,7 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 - **[stu.py](stu.py)**：学生信息 DAO，默认 `count=0` 取列表第一个学生
 - **[funcs.py](funcs.py)**：工具函数。`CHAT_LOG_FILE` 根据 `_use_mock` 切换 `chat_history_mock.json` / `chat_history.json`。`load_chat_history() -> list[Message]`、`append_message` / `merge_messages(messages: list[Message])` 只维护 `messages` 字段，不维护 `earliest_id` / `last_id`。
 - **[upload.py](upload.py)**：文件上传到希沃云存储接口，返回 `downloadUrl`。
-- **[yunban.py](yunban.py)**：云班功能扩展（班级列表、考勤事件、签到等）。`getpass` 用于获取离线验证码，`getpass2` 依赖 pandas 剪贴板（**损坏**）。
+- **[yunban.py](yunban.py)**：云班功能扩展（班级列表、考勤事件、签到等）。多数方法走独立的 campus 云班 REST 端点（`/api/classmember` / `kidnote` / `attendance`），**直接 `requests.request`，绕过 `request_manager`**（无统一节流，调用方需自行控制频率）。各 get 函数返回数据模型（`YunbanClass` 等）。`getpass` 获取离线验证码、`getpass2` 监听剪贴板（依赖 `pyperclip`）。
 - **[qrcode.py](qrcode.py)**：终端二维码渲染（依赖 `pillow`）。
 
 ## 核心 API 端点（路径 B）
@@ -172,6 +183,14 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 | `Message` | ❌ 只 slots，**可变** | 格式化后消息（`chat_history.json` 存储 / `message_service._messages` 缓存）。可变是为方便 `load_local` 补 `senderName`（直接 `m.senderName = name`，不必 `replace`）。`type` 标注 `int \| str`：保留 main.py 写`str(msg_type)` / message_service 写 int 的既有混合行为 |
 | `MessageResponse` | ✅ frozen+slots | `msg.get` 的响应包装（含 `result: list[RawMessage]`）。容器只读，但 `result` 是 list 自身可变 |
 | `Config` | ❌ 只 slots，**可变** | `config.json` 数据模型。可变是为了让 `init.reload_config()` 原地更新实现热重载。typed 字段覆盖已知配置项，未建模的原始键收集到 `extra` 保留，`banPaiConfig` 映射为 `ban_pai_config` dict 字段 |
+| `YunbanClass` | ✅ frozen+slots | 云班班级（`getclasslist` 返回元素，含 uid/name/roomUid/schoolUid 等） |
+| `YunbanStudent` | ✅ frozen+slots | 云班学生（`getstulist` 返回元素，含 name/sid/uid/gender/卡号等） |
+| `YunbanEvent` | ✅ frozen+slots | 云班考勤事件（`getevents` 返回元素，含 name/eventId/起止时间/周期/绑班/config 班牌时段等） |
+| `YunbanParent` | ✅ frozen+slots | 云班家长（`getparents` 返回元素，含 parentName/手机号/bindWx/未读数/关系位） |
+| `YunbanNote` | ✅ frozen+slots | 云班留言（`getnotes` 的 `result` 元素，含 sender/receiver/type/status/resUrl/时间等） |
+| `YunbanNotesPage` | ✅ frozen+slots | 云班留言分页（`getnotes` 返回结构，`result: list[YunbanNote]`） |
+
+> 云班模型（`Yunban*`）均沿用 `from_dict` + `.get` 兜底约定（frozen+slots），未建模的原始键收集到 `extra` 保留。
 
 **核心改造点**：
 
@@ -179,6 +198,7 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 - `msg.get(count, start) -> MessageResponse`、辅助方法 `get_id` / `get_all_ids` / `get_content_by_index` / `get_msg_detail` 用属性访问（`.result` / `m.id` / `m.content`）
 - `message_service._format_msg(raw: RawMessage) -> Message`、`_messages: list[Message]`、对外方法返回 dict（边界 `dataclasses.asdict(m)` 转 dict 给 jsonify）
 - `main.py` 字段访问从 `.get("x", default)` 改为 `.x`（运行时行为不变，AGENTS.md 硬约束已放宽至此）
+- `yunban.py` 各 get 函数返回云班模型（`Yunban*`），`searchstubyname`/`searchstubyuid` 未命中返回 `None`（原为 `{}`）
 
 ### 长消息处理（仅 `/api/send`，路径 B 独有）
 
@@ -283,6 +303,7 @@ encode_data = {"action": type, "params": pxencode(params)}
   - 单条留言 200 字上限（超长返回 `statusCode=40000`）
   - `start` 是 1-based 页码，`start<1` 触发 SQL 语法错误（`statusCode=50000`，对齐生产 MyBatis 行为）
   - 页内按 id 升序（旧→新），页间无重叠
+- **云班 REST 对齐已统一**：生产实测云班同一模块跨 v1~v5 版本均存活（版本号不敏感），mock 用 `<int:version>` 通配；`classmember`/`kidnote`/`attendance` 各端点返回结构已按新模型对齐（`kidnote` 留言返回分页 `{page,pageSize,result,totalCount}`、家长计数返回 `YunbanParent` 列表、事件用 `name` 字段、班级含 `schoolUid/schoolName/schoolType`）。内置孩子的家长表存于 `mock_data.parents`（按 child_uid 索引）。
 - **聊天记录隔离**：mock 模式下 `funcs.py` 自动把 `CHAT_LOG_FILE` 切到 `chat_history_mock.json`，避免测试数据污染真实 `chat_history.json`。
 - **UID 自动适配**：mock 遇到未知家长 UID 时自动接管 `mock_parent_001` 的身份和消息，无需手动配置。
 
@@ -413,8 +434,8 @@ def xxx():
 
 ## 已知问题
 
-- [auto_attend.py](auto_attend.py) 损坏：第 4 行 `from yunabn_token import test` 模块不存在（疑似应为 `yunban`），脚本无法运行
-- [yunban.py](yunban.py) 的 `getpass2` 依赖 `pandas.io.clipboard`，但 `pyproject.toml` / `requirements.txt` 未含 pandas
+- [auto_attend.py](auto_attend.py) 粗糙非生产级：硬编码 `classlist[35]`；事件选择靠 `sys.argv[1]` + `events[1]` 回退，`events` 为空时与 owner 原版一样照常 `IndexError` 崩溃。依赖模块 `yunban_token` 能连生产取数。
+- [yunban.py](yunban.py) 的所有请求**直接 `requests.request`，绕过 `request_manager`**：无统一节流 / 429 退避。批量取出全部班级、逐班取学生、批量签到等高频场景需调用方自行 `time.sleep` 防风控（503/504）。
 - [message_service.py:157-159](message_service.py#L157-L159) 的 `if delay > request_manager.MIN_INTERVAL` 是耦合传输层细节的实现，理想做法是直接 `time.sleep(delay)` 让 request_manager 节流叠加，或完全移除让 request_manager 单独节流
 - **uploads.json 按纯文件名做 key，同名覆盖**：写入逻辑在 [upload.py#L121-L122](upload.py#L121-L122)，key 只取 `os.path.basename(file)`，不区分完整路径、不区分家长账号。同一个 basename 的文件重复上传（哪怕路径不同、账号不同、内容不同），后写的都会直接覆盖前一条。影响范围有限：主业务链路（上传 → 发送留言）走内存中的 `downloadUrl`，不读这份台账，因此不会导致发错、漏发；只会影响"事后手动打开 uploads.json 按文件名翻历史上传 URL"的查询场景。暂时不打算改文件格式（避免破坏已按旧 dict 格式写了解析逻辑的其他开发者脚本），如要修复需提前发布变更公告。
 
