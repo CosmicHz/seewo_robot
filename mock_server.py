@@ -551,10 +551,15 @@ def handle_upload_policy(params):
     return {
         "statusCode": 200,
         "data": {
+            # 生产实测（tmp/probe_upload_policy.py）：expireSeconds 在 data 层，
+            # policyList[0] 只有 uploadUrl/headerFields/priority/type/formFields
+            "expireSeconds": 3600,
             "policyList": [
                 {
                     "uploadUrl": f"http://localhost:{mock_port}/upload/cos",
-                    "expireSeconds": 3600,
+                    "headerFields": [],
+                    "priority": 1,
+                    "type": "cos",
                     "formFields": [
                         {"value": f"mock_key_{uuid.uuid4().hex[:8]}"},
                         {"value": f"mock_policy_{uuid.uuid4().hex[:8]}"},

@@ -100,11 +100,10 @@ class TestGetResource:
         assert up.downloadUrl == ""
 
 
-@pytest.mark.skip(reason="待生产验证：upload policy 的 expireSeconds 字段位置")
 def test_mock_server_policy_matches_client_expectations():
-    """待生产验证：客户端的字段读法（data.expireSeconds）与 mock 的写法不一致，二者必有一错。
+    """mock 的策略结构须与生产一致（已由 tmp/probe_upload_policy.py 实测确认）：
 
-    生产实测确认字段位置后再决定改 mock 还是改客户端。
+    expireSeconds 在 data 层；policyList[0] 含 uploadUrl 与 >=11 个 formFields。
     """
     from mock_server import ACTION_HANDLERS
 
