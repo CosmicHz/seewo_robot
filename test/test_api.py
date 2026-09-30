@@ -108,9 +108,6 @@ def main():
     # 12. 刷新会话
     test_endpoint("POST", "/api/refresh", "12. 刷新会话")
 
-    # 13. 执行命令
-    test_endpoint("POST", "/api/execute", "13. 执行命令", json={"command": "status"})
-
 
 if __name__ == "__main__":
     main()

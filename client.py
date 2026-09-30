@@ -93,10 +93,6 @@ class SeewoClient:
         """刷新会话"""
         return self._request("POST", "/api/refresh")
 
-    def execute_command(self, command: str) -> dict:
-        """执行命令"""
-        return self._request("POST", "/api/execute", json={"command": command})
-
 
 # 命令行接口
 def main():
