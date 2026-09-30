@@ -130,7 +130,7 @@ class MockData:
                 "gender": 0,
                 "headImageUrl": "http://localhost:9000/upload/files/mock/head.png",
                 "ucPassword": "",
-                "extendCardIds": ["MOCKCARD001"],
+                "extendCardIds": ["DEADBEEF"],
             },
         }
 
