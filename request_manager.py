@@ -21,6 +21,9 @@ _lock = threading.Lock()
 _last_request_time = 0.0
 # 最小请求间隔(秒)：全局保底节流，防并发触发风控
 MIN_INTERVAL = 0.5
+# 单次请求超时(秒)：避免对端挂死导致调用方无限阻塞。
+# 注意：超时不重试。发送类请求非幂等，超时可能已被服务端处理，重试会造成重复留言。
+TIMEOUT = 10
 # 队列化预留：后续可引入 queue.Queue + worker 线程串行消费所有请求
 # 当前同步执行 + 节流；多线程调用时靠 _lock 串行化节流点
 # _request_queue = queue.Queue()
@@ -46,7 +49,9 @@ def post(url, headers, data):
     """
     for attempt in range(3):
         _throttle()
-        resp = requests.post(url, headers=headers, data=data, verify=verify)
+        resp = requests.post(
+            url, headers=headers, data=data, verify=verify, timeout=TIMEOUT
+        )
         if resp.status_code != 429:
             return resp
         backoff = 2**attempt

@@ -6,7 +6,7 @@ from login import acc
 from init import urls, proxies
 from stu import stu
 from api import api
-from models import MessageResponse, RawMessage
+from models import MessageResponse, RawMessage, SendResult, SeewoCode
 
 
 class msg:
@@ -73,6 +73,7 @@ class msg:
         return result[0].content if result else ""
 
     def send(self, content: str, type: int, resUrl="", voiceLength=0, resConfig=""):
+        """发送留言，返回 SendResult（含 statusCode，便于上层区分 Token 失效与业务拒绝）"""
         data = {
             "schoolUid": self.stu.schoolUid,
             "classUid": self.stu.classUid,
@@ -99,16 +100,18 @@ class msg:
                 data["resUrl"] = resUrl
                 data["resConfig"] = resConfig
         post = api().action("POST_KIDNOTE_V1_NOTE", data, self.acc)
-        code = post["statusCode"]
-        if code == -500:
-            print("发送失败")
-            return False
-        elif code == 200:
+        result = SendResult.from_seewo_code(
+            post.get("statusCode", 0), post.get("message", "")
+        )
+        if result.ok:
             print("发送成功：" + content)
-            return True
+        elif result.needs_relogin:
+            print(
+                f"发送失败：Token 无效或已过期（希沃码 {result.seewo_code}，见 models.SeewoCode）"
+            )
         else:
-            print(f"unknown error: {post}")
-            return False
+            print(f"发送失败：{result.message or post}")
+        return result
 
     def get_id(self, count: int) -> int:
         result = self.get(count).result
@@ -140,10 +143,10 @@ class msg:
         data = {"ids": [id]}
         post = api().action("DELETE_KIDNOTE_V1_NOTE", data, self.acc)
         code = post["statusCode"]
-        if code == -500:
+        if SeewoCode.is_invalid(code):
             print("删除失败")
             return False
-        elif code == 200:
+        elif SeewoCode.is_ok(code):
             print("删除成功：")
             return True
         else:

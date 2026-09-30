@@ -13,13 +13,15 @@ import logging
 import threading
 from flask import Flask, request, jsonify
 from functools import wraps
+from typing import Tuple
 
 from init import qrcode_file, token_file, config, reload_config
 from login import acc, download_qrcode, check_qrcode
 from funcs import write_file
+from models import SeewoQrCode, SendResult
 from stu import stu
 from msg import msg
-from upload import Upload
+from upload import upload_file
 from message_service import MessageDataSource
 
 app = Flask(__name__)
@@ -168,25 +170,61 @@ _login_state = {
 _login_lock = threading.Lock()
 
 
-def _check_session():
-    """检查会话是否有效，无效则返回需要登录的响应"""
-    session.init()
-    if session.needs_login:
-        return jsonify(
+def _need_login_response():
+    """统一的「需要重新登录」响应（会话未初始化与发送中途 Token 失效共用）"""
+    return (
+        jsonify(
             {
                 "status": "error",
                 "message": "Token已过期，需要重新登录",
                 "need_login": True,
             }
-        ), 401
+        ),
+        401,
+    )
+
+
+def _check_session():
+    """检查会话是否有效，无效则返回需要登录的响应"""
+    session.init()
+    if session.needs_login:
+        return _need_login_response()
     return None
 
 
+def _send(
+    content, type=1, resUrl="", voiceLength=0, resConfig=""
+) -> Tuple[SendResult, bool]:
+    """发送留言并对 Token 失效做一次自愈：刷新会话后重发一次。
+
+    Token 失效的判定统一走 `SendResult.needs_relogin`（语义见 models.SeewoCode），
+    不在本层重复声明 -500/-505 字面量。
+
+    返回 (SendResult, need_login)；need_login=True 表示刷新后 Token 仍失效，
+    调用方应返回 401 由客户端引导扫码。
+    """
+    result = session.stu_msg.send(content, type, resUrl, voiceLength, resConfig)
+    if not result.needs_relogin:
+        return result, False
+
+    logger.warning(
+        "发送遇 Token 失效(希沃码 %s)，刷新会话后重发一次", result.seewo_code
+    )
+    try:
+        session.refresh()
+    except Exception as e:  # 重登失败（如未添加学生）不应把异常抛给客户端
+        logger.error("会话刷新失败: %s", e)
+        return result, True
+
+    if session.needs_login or session.stu_msg is None:
+        return result, True
+    result = session.stu_msg.send(content, type, resUrl, voiceLength, resConfig)
+    return result, result.needs_relogin
+
+
 def upload_file_to_cloud(file_path: str, content_type: str = "image/png") -> str:
-    """上传文件到云存储"""
-    up = Upload(session.account)
-    up.upload(file=file_path, type=content_type)
-    return up.downloadUrl
+    """上传文件到云存储（绑定当前会话的薄封装，实现在 upload.upload_file）"""
+    return upload_file(session.account, file_path, content_type)
 
 
 # ============== 登录相关 API ==============
@@ -194,11 +232,13 @@ def upload_file_to_cloud(file_path: str, content_type: str = "image/png") -> str
 
 def _poll_login(cookies):
     """后台线程：轮询扫码状态"""
-    status = 200
+    status = SeewoQrCode.WAITING
     data = None
     max_attempts = 150  # 5分钟超时 (150 * 2秒)
     attempt = 0
-    while (status == 200 or status == 201) and attempt < max_attempts:
+    while (
+        status in (SeewoQrCode.WAITING, SeewoQrCode.SCANNED) and attempt < max_attempts
+    ):
         try:
             data = check_qrcode(cookies)["data"]
             status = data["statusCode"]
@@ -208,7 +248,7 @@ def _poll_login(cookies):
         time.sleep(2)
 
     with _login_lock:
-        if status == 202 and data:
+        if SeewoQrCode.is_confirmed(status) and data:
             write_file(token_file, json.dumps(data).encode())
             _login_state["success"] = True
             session.refresh()
@@ -332,14 +372,14 @@ def send_message():
         strategy: 可选，长消息处理策略 "truncate"|"split"，缺省取全局配置
                   truncate=截断为199字(默认) / split=按199字拆分多条发送
                   split 模式下，拆分位置优先取 long_message_split_pattern 正则
-                  匹配点（默认 \r?\n，兼容 CRLF 与 LF）之前，匹配字符整体
+                  匹配点（默认 \\r?\\n，兼容 CRLF 与 LF）之前，匹配字符整体
                   跟到下一段开头；无处可拆时回退到硬切 199 字
     """
     err = _check_session()
     if err:
         return err
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         content = data.get("content", "")
         strategy = data.get("strategy") or config.long_message_strategy
 
@@ -348,11 +388,16 @@ def send_message():
 
         # 短消息：直接发送
         if len(content) <= MSG_MAX_LEN:
-            success = session.stu_msg.send(content, 1)
+            result, need_login = _send(content, 1)
+            if need_login:
+                return _need_login_response()
             return jsonify(
                 {
-                    "status": "ok" if success else "error",
-                    "message": "发送成功" if success else "发送失败",
+                    "status": "ok" if result.ok else "error",
+                    "seewoCode": result.seewo_code,
+                    "message": "发送成功"
+                    if result.ok
+                    else (result.message or "发送失败"),
                 }
             )
 
@@ -361,7 +406,10 @@ def send_message():
             chunks = _split_long_message(content)
             results = []
             for chunk in chunks:
-                results.append(bool(session.stu_msg.send(chunk, 1)))
+                sent, need_login = _send(chunk, 1)
+                if need_login:
+                    return _need_login_response()
+                results.append(sent.ok)
             success = all(results)
             return jsonify(
                 {
@@ -378,13 +426,18 @@ def send_message():
             )
         else:  # truncate（默认）
             content = content[: MSG_MAX_LEN - 3] + "..."
-            success = session.stu_msg.send(content, 1)
+            result, need_login = _send(content, 1)
+            if need_login:
+                return _need_login_response()
             return jsonify(
                 {
-                    "status": "ok" if success else "error",
+                    "status": "ok" if result.ok else "error",
+                    "seewoCode": result.seewo_code,
                     "strategy": "truncate",
                     "truncated": True,
-                    "message": "发送成功" if success else "发送失败",
+                    "message": "发送成功"
+                    if result.ok
+                    else (result.message or "发送失败"),
                 }
             )
     except Exception as e:
@@ -421,11 +474,24 @@ def send_image():
 
         # 上传并发送
         url = upload_file_to_cloud(file_path, "image/png")
-        if url:
-            session.stu_msg.send("", 2, url)
-            return jsonify({"status": "ok", "url": url})
-        else:
+        if not url:
             return jsonify({"status": "error", "message": "upload failed"}), 500
+        result, need_login = _send("", 2, url)
+        if need_login:
+            return _need_login_response()
+        if not result.ok:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": result.message or "发送失败",
+                        "seewoCode": result.seewo_code,
+                        "url": url,
+                    }
+                ),
+                500,
+            )
+        return jsonify({"status": "ok", "url": url})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -443,7 +509,7 @@ def send_audio():
     if err:
         return err
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         file_path = data.get("file_path")
         voice_length = data.get("voice_length", 666)
 
@@ -451,15 +517,41 @@ def send_audio():
             return jsonify({"status": "error", "message": "file_path invalid"}), 400
 
         # 发送文件名
-        session.stu_msg.send(os.path.basename(file_path), 1)
+        named, need_login = _send(os.path.basename(file_path), 1)
+        if need_login:
+            return _need_login_response()
+        if not named.ok:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": named.message or "发送失败",
+                        "seewoCode": named.seewo_code,
+                    }
+                ),
+                500,
+            )
 
         # 上传并发送音频
         url = upload_file_to_cloud(file_path, "audio/mp3")
-        if url:
-            session.stu_msg.send("", 3, url, voice_length)
-            return jsonify({"status": "ok", "url": url})
-        else:
+        if not url:
             return jsonify({"status": "error", "message": "upload failed"}), 500
+        result, need_login = _send("", 3, url, voice_length)
+        if need_login:
+            return _need_login_response()
+        if not result.ok:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": result.message or "发送失败",
+                        "seewoCode": result.seewo_code,
+                        "url": url,
+                    }
+                ),
+                500,
+            )
+        return jsonify({"status": "ok", "url": url})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -617,35 +709,6 @@ def reload_config_api():
                 "long_message_strategy": config.long_message_strategy,
             }
         )
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-
-@app.route("/api/execute", methods=["POST"])
-@require_api_key
-def execute_command():
-    """执行命令（慎用）
-
-    JSON body:
-        command: 命令内容
-    """
-    err = _check_session()
-    if err:
-        return err
-    try:
-        data = request.get_json()
-        command = data.get("command", "")
-
-        if not command:
-            return jsonify({"status": "error", "message": "command is required"}), 400
-
-        # 安全限制：只允许特定命令
-        allowed_prefixes = ["getpass", "发送音乐"]
-        if not any(command.startswith(p) for p in allowed_prefixes):
-            return jsonify({"status": "error", "message": "command not allowed"}), 403
-
-        result = os.popen(command).read()
-        return jsonify({"status": "ok", "result": result})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 

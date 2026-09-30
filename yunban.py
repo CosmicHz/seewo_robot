@@ -9,6 +9,7 @@ from login import acc
 from api import api
 from init import config, verify
 from models import (
+    SendResult,
     YunbanClass,
     YunbanStudent,
     YunbanEvent,
@@ -289,14 +290,23 @@ class yunban:
         # code = post["statusCode"]
 
         response = requests.post(url, json=data, headers=self.headers, verify=verify)
-        code = response.status_code
-        if code == -500:
-            print("发送失败")
-            return False
-        elif code == 200:
-            print("发送成功：" + content)
-            return True
+        http_status = response.status_code
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        # 业务码与 HTTP 码分开放：body 里有 statusCode 就用它，没有则只记传输层失败
+        if isinstance(body, dict) and "statusCode" in body:
+            result = SendResult.from_seewo_code(
+                body["statusCode"], body.get("message", ""), http_status=http_status
+            )
         else:
-            print("unknown error:")
-            print(response.text)
-        return response.json()
+            result = SendResult.from_http_error(http_status, response.text)
+        if result.ok:
+            print("发送成功：" + content)
+        else:
+            print(
+                f"发送失败：{result.message or response.text}"
+                f"（希沃码 {result.seewo_code}，HTTP {result.http_status}）"
+            )
+        return result
