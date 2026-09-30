@@ -19,7 +19,14 @@ dev = [
     "pip-tools==7.6.1",
     "ruff==0.16.4",
     "pytest==9.0.2",
+    "responses==0.26.3",
 ]
+
+[tool.pytest.ini_options]
+# 用例集中在 tests/：test/ 下是手工联调脚本，其 test_endpoint 会被误当作用例收集
+testpaths = ["tests"]
+# 仓库根加入 sys.path，使 tests/ 内可直接 import 项目模块（项目为扁平模块布局）
+pythonpath = ["."]
 
 [tool.setuptools.packages.find]
 include = ["seewo_robot*"]

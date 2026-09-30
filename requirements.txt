@@ -2,7 +2,7 @@ blinker==1.9.0
     # via flask
 certifi==2026.7.22
     # via requests
-charset-normalizer==3.5.1
+charset-normalizer==3.5.2
     # via requests
 click==8.5.0
     # via flask
@@ -32,7 +32,7 @@ mdurl==0.1.2
     # via markdown-it-py
 pillow==12.3.0
     # via seewo-robot (pyproject.toml)
-platformdirs==4.11.12
+platformdirs==4.12.2
     # via textual
 pygments==2.21.0
     # via
@@ -56,5 +56,5 @@ typing-extensions==4.16.0
     # via textual
 urllib3==2.8.0
     # via requests
-werkzeug==3.1.8
+werkzeug==3.1.9
     # via flask

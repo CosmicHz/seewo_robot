@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# pre-commit: ① 对暂存的 .py 文件执行 ruff format 并重新暂存；② pyproject.toml / uv.lock 变更时，
+# pre-commit: ① 对暂存的 .py 文件执行 ruff format 并重新暂存；② pyproject.toml 变更时，
 # 用 pip-compile 重新生成 requirements.txt 并 stage。
 #
-# requirements.txt 是只读的锁文件（生成产物），依赖一律在 pyproject.toml 声明；缺 pip-compile 时**阻止**提交。
-# 缺 ruff 时也会**阻止**提交，避免格式化脱节。
+# 依赖真源是 pyproject.toml；requirements.txt 是只读锁文件（生成产物），uv.lock 不跟踪。
+# 缺 pip-compile 时阻止提交；缺 ruff 时也会阻止提交，避免格式化脱节。
 # ① 仅暂存了 Python 文件时触发（ruff format 幂等，已格式化则无改动）。
 #
 # 激活方式（一次性）：
@@ -31,7 +31,7 @@ if [ -n "$py_files" ]; then
 fi
 
 # ② 依赖变更时才重生成 requirements.txt；否则直接结束
-if ! printf '%s\n' "$staged" | grep -qE '^(pyproject\.toml|uv\.lock)$'; then
+if ! printf '%s\n' "$staged" | grep -qE '^pyproject\.toml$'; then
     exit 0
 fi
 

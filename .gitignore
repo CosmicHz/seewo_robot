@@ -17,6 +17,9 @@ venv/
 *.env
 *.egg-info/
 
+# 依赖
+uv.lock
+
 # 临时/调试脚本
 debug.py
 music/
