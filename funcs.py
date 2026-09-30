@@ -6,7 +6,7 @@ import json
 import time
 import os
 
-from init import _use_mock, project_path
+from init import config, project_path
 from models import Message
 
 filedate = time.strftime("%Y-%m-%d", time.localtime())
@@ -55,32 +55,56 @@ def logw(t: str) -> None:
         file.write(log)
 
 
-# 聊天记录存储（mock 模式用独立文件，避免测试数据污染真实记录）
-CHAT_LOG_FILE = project_path(
-    "chat_history_mock.json" if _use_mock else "chat_history.json"
-)
+def chat_log_file() -> str:
+    """聊天记录文件路径（mock 模式用独立文件，避免测试数据污染真实记录）。
+
+    每次调用即时读 config.use_mock：配置读后即过期，不能缓存成模块常量，
+    否则热重载切换 mock 模式后仍会往旧文件写（污染真实记录）。
+    """
+    return project_path(
+        "chat_history_mock.json" if config.use_mock else "chat_history.json"
+    )
+
+
+class CorruptChatHistoryError(ValueError, KeyError):
+    """聊天记录文件存在但无法解析 —— 快速失败，避免被当成空记录覆盖清零。
+
+    这里是**故意不吞异常**：读容错 + 全量覆盖写 会把「文件损坏」当「没有记录」，
+    一次 append 就把真实历史整体覆盖。宁可在启动时直接崩掉，让人立刻发现。
+    """
+
+    pass
 
 
 def load_chat_history() -> list[Message]:
-    """从文件加载聊天记录。
+    """从文件加载聊天记录（文件不存在视为空记录）。
 
     Returns:
         消息列表（list[Message]，按文件中的顺序，不保证已排序）
+
+    Raises:
+        CorruptChatHistoryError: 文件存在但结构损坏（非法 JSON / 缺 messages / 元素不是对象）
     """
-    if os.path.exists(CHAT_LOG_FILE):
-        try:
-            data = load_json(CHAT_LOG_FILE)
-            if not isinstance(data, dict) or "messages" not in data:
-                raise ValueError("invalid chat history")
-            return [Message.from_dict(m) for m in data.get("messages", [])]
-        except (json.JSONDecodeError, KeyError, ValueError):
-            pass
-    return []
+    path = chat_log_file()
+    if not os.path.exists(path):
+        return []
+    try:
+        data = load_json(path)
+        messages = data["messages"] if isinstance(data, dict) else None
+        if not isinstance(messages, list):
+            raise ValueError("缺少 messages 列表")
+        if not all(isinstance(m, dict) for m in messages):
+            raise ValueError("messages 元素不是对象")
+        return [Message.from_dict(m) for m in messages]
+    except (json.JSONDecodeError, KeyError, ValueError, OSError) as e:
+        raise CorruptChatHistoryError(
+            f"聊天记录文件无法解析，请修复或删除后重建（sync_all 可重新拉取全量）: {path} → {e}"
+        ) from e
 
 
 def overwrite_chat_history_file(messages: list[Message]) -> None:
     """保存聊天记录到文件（messages: list[Message]）"""
-    with open(CHAT_LOG_FILE, "w", encoding="utf-8") as f:
+    with open(chat_log_file(), "w", encoding="utf-8") as f:
         json.dump(
             {"messages": [dataclasses.asdict(m) for m in messages]},
             f,
@@ -121,6 +145,9 @@ def merge_messages(messages: list[Message]) -> None:
 
     合并后按 ID 排序，确保顺序为旧→新（与 append_message 行为一致），
     不假设传入 messages 的顺序，也不假设它们与本地已有消息的相对位置。
+
+    **不去重**：与本地已有消息 id 相同的条目会被原样保留（合并后可能出现重复 id），
+    调用方需自行保证不重复传入（如 sync_all 会先按已有 id 过滤）。
 
     Args:
         messages: 待合并的 Message 列表

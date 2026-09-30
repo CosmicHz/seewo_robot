@@ -27,13 +27,14 @@ import os
 import time
 import uuid
 from datetime import datetime
-
 from flask import Flask, request, jsonify, Response
+
+from init import project_path
 
 app = Flask(__name__)
 
 MOCK_PORT = 9000
-DATA_FILE = "mock_data.json"
+DATA_FILE = project_path("mock_data.json")
 # 模拟希沃服务器：单条留言内容长度上限，超过返回 statusCode=40000
 SEEWO_CONTENT_MAX_LEN = 200
 

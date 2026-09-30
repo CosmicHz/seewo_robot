@@ -11,7 +11,8 @@ import dataclasses
 from datetime import datetime
 from functools import partial
 from operator import attrgetter
-from funcs import load_chat_history, merge_messages, CHAT_LOG_FILE
+import funcs
+from funcs import load_chat_history, merge_messages
 from models import RawMessage, Message
 from sortedcontainers import SortedKeyList
 import request_manager
@@ -36,7 +37,7 @@ class MessageDataSource:
     def _refresh(self):
         """检查文件 mtime，变了就重新加载到缓存"""
         try:
-            mtime = os.path.getmtime(CHAT_LOG_FILE)
+            mtime = os.path.getmtime(funcs.chat_log_file())
         except OSError:
             self._messages = _MessageSortedList()
             self._mtime = -1
