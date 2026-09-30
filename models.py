@@ -7,6 +7,46 @@
 """
 
 from dataclasses import dataclass, field
+from enum import IntEnum
+
+
+class SeewoCode(IntEnum):
+    """希沃业务状态码（响应体里的 `statusCode` 字段）——状态码语义的唯一约定。
+
+    **与 HTTP 状态码是两套互不相干的码，不得互相比较、互相赋值**：
+    - HTTP 状态码：`requests` 的 `response.status_code`，只表示传输层结果（200/429/502…）
+    - 希沃业务码：本枚举，表示业务结果（成功 / Token 失效 / 业务拒绝 / 服务器错误）
+    """
+
+    OK = 200
+    TOKEN_INVALID = -500
+    TOKEN_EXPIRED = -505
+    BUSINESS_REJECTED = 40000  # 业务校验失败，如留言超 200 字
+    SERVER_ERROR = 50000  # 服务器内部错误，如 start<1 触发 SQL 语法错误
+
+    @classmethod
+    def is_ok(cls, code: int) -> bool:
+        return code == cls.OK
+
+    @classmethod
+    def is_invalid(cls, code: int) -> bool:
+        """Token 无效（-500），需传入正确的 Token"""
+        return code == cls.TOKEN_INVALID
+
+    @classmethod
+    def is_expired(cls, code: int) -> bool:
+        """Token 过期（-505），需重新登录获取"""
+        return code == cls.TOKEN_EXPIRED
+
+    @classmethod
+    def is_relogin_code(cls, code: int) -> bool:
+        """Token 失效（-500/-505）：服务端未写入业务数据，重新登录后重试是安全的"""
+        return cls.is_invalid(code) or cls.is_expired(code)
+
+    @classmethod
+    def is_business_reject(cls, code: int) -> bool:
+        """业务拒绝（如 40000 超长）：重试也不会成功，不应触发重新登录"""
+        return code == cls.BUSINESS_REJECTED
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +156,22 @@ class Config:
         return cfg
 
 
+class SeewoQrCode(IntEnum):
+    """扫码登录的 `statusCode`（仅登录流程使用）。
+
+    `pcCheckQrcode` 接口用 200/201/202 表示扫码进度，与业务码
+    （`SeewoCode`）语义不同，不要混用。
+    """
+
+    WAITING = 200  # 待扫码
+    SCANNED = 201  # 已扫码待确认
+    CONFIRMED = 202  # 已确认（登录成功，可写 tokens.json）
+
+    @classmethod
+    def is_confirmed(cls, status: int) -> bool:
+        return status == cls.CONFIRMED
+
+
 @dataclass(frozen=True, slots=True)
 class MessageResponse:
     """msg.get 经 pxdecode 后的响应包装（含 result 消息列表）。
@@ -134,6 +190,54 @@ class MessageResponse:
             statusCode=d.get("statusCode", 0),
             message=d.get("message", ""),
             result=[RawMessage.from_dict(m) for m in d.get("result", [])],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SendResult:
+    """发送类操作的统一结果（msg.send / yunban.send_msg）。
+
+    `http_status` 与 `seewo_code` 是**两套独立的码，分别存放、绝不互相赋值**：
+    - `seewo_code`：希沃业务状态码（响应体 `statusCode`），语义见 `SeewoCode`
+    - `http_status`：HTTP 传输层状态码；0 表示未取到（如 m-campus 网关只回 JSON）
+
+    `__bool__` 委托 `ok`，使既有 `if result:` 写法保持正确语义。
+    """
+
+    ok: bool = False
+    seewo_code: int = 0
+    http_status: int = 0
+    message: str = ""
+
+    def __bool__(self) -> bool:
+        return self.ok
+
+    @property
+    def needs_relogin(self) -> bool:
+        """Token 失效（-500/-505），上层应刷新会话后重发"""
+        return SeewoCode.is_relogin_code(self.seewo_code)
+
+    @property
+    def is_business_reject(self) -> bool:
+        """业务拒绝（如超 200 字），重发无意义"""
+        return SeewoCode.is_business_reject(self.seewo_code)
+
+    @classmethod
+    def from_seewo_code(
+        cls, seewo_code: int, message: str = "", http_status: int = 0
+    ) -> "SendResult":
+        return cls(
+            ok=SeewoCode.is_ok(seewo_code),
+            seewo_code=int(seewo_code),
+            http_status=int(http_status),
+            message=message,
+        )
+
+    @classmethod
+    def from_http_error(cls, http_status: int, message: str = "") -> "SendResult":
+        """只在传输层失败、拿不到业务码时使用（如网关返回 HTML 502）"""
+        return cls(
+            ok=False, seewo_code=0, http_status=int(http_status), message=message[:200]
         )
 
 

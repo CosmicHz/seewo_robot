@@ -9,6 +9,7 @@ acc 类封装账户凭证，提供 headers/mheaders 两种请求头分别用于�
 from qrcode import print_qrcode
 from init import token_file, qrcode_file, proxies, verify, headers_nocookie, urls
 from funcs import load_json, write_file
+from models import SeewoCode, SeewoQrCode
 import json
 import logging
 import requests
@@ -105,13 +106,13 @@ class acc:
             True=Token 有效，False=Token 无效或过期
         """
         code = json.loads(re)["statusCode"]
-        if code == -500:
+        if SeewoCode.is_invalid(code):
             print("登录失败：token无效")
             return False
-        elif code == -505:
+        elif SeewoCode.is_expired(code):
             print("登录失败：token已过期")
             return False
-        elif code == 200:
+        elif SeewoCode.is_ok(code):
             return True
         else:
             print(re, end="\n")
@@ -156,8 +157,7 @@ def check_qrcode(cookies):
         cookies: download_qrcode() 返回的 Cookie
 
     Returns:
-        dict: 包含 statusCode 的扫码结果
-            200=等待扫码, 201=已扫码待确认, 202=已确认(登录成功)
+        dict: 包含 statusCode 的扫码结果（语义见 models.SeewoQrCode）
     """
     re = requests.get(
         urls().check_qrcode,
@@ -176,14 +176,14 @@ def login():
     """
     cookies = download_qrcode()
     print_qrcode(qrcode_file)
-    status = 200
-    while status == 200 or status == 201:
+    status = SeewoQrCode.WAITING
+    while status in (SeewoQrCode.WAITING, SeewoQrCode.SCANNED):
         data = check_qrcode(cookies)["data"]
         status = data["statusCode"]
         message = data["message"]
         print(str(int(time.time())) + ": " + message + str(status), end="\r")
     else:
-        if status == 202:
+        if SeewoQrCode.is_confirmed(status):
             write_file(token_file, json.dumps(data).encode())
             return True
         else:
