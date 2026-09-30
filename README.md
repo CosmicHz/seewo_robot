@@ -24,7 +24,7 @@ Seewo 班牌机器人是一个对接**希沃云班**小程序的聊天工具。�
   - 文本（支持超长消息的 **截断** 或 **智能拆分多条** 两种策略）
   - 图片
   - 音频
-- **命令执行**：收到以 `/` 开头的留言时执行指定命令（如获取离线验证码、批量发送音乐等）
+- **命令执行**（仅路径 A `main.py`）：收到以 `/` 开头的留言时执行指定命令（如获取离线验证码、批量发送音乐等）
 - **聊天记录持久化**：所有消息保存到本地 JSON，可随时查看历史
 - **全量同步历史消息**：把希沃服务器上的历史消息一次性拉到本地（带防风控延迟）
 - **TUI 终端图形界面**：基于 Textual，支持快捷键操作
@@ -40,21 +40,35 @@ Seewo 班牌机器人是一个对接**希沃云班**小程序的聊天工具。�
 
 ### 1. 安装依赖
 
+依赖声明在 `pyproject.toml`。
+#### 普通用户
+
 ```bash
-# 推荐：使用 uv（自动按 uv.lock 锁定版本，最稳定）
+# 推荐：使用 uv
 uv sync
 
 # 或使用 pip
-pip install -r requirements.txt
+pip install -e .
+```
+
+#### 贡献者
+
+```bash
+# 使用 uv
+uv sync --extra dev
+
+# 或使用 pip
+pip install -e ".[dev]"
 ```
 
 > [!IMPORTANT]
 > **依赖管理约定**
 >
-> - 项目依赖的**唯一来源**是 [`pyproject.toml`](pyproject.toml)，请在那里声明依赖。
-> - [`requirements.txt`](requirements.txt) 是**锁文件**（生成产物），**请勿手动修改**；它是给 `pip install -r requirements.txt` 用的兼容快照。
-> - 开发依赖（`pip-tools` / `ruff` / `pytest`）已 pin 版本声明在 `pyproject.toml` 的 `dev` 组。
-> - 修改 `pyproject.toml` / `uv.lock` 后，`pre-commit` 钩子在提交时自动用 `pip-compile` 重新生成并暂存 `requirements.txt`；**若本机未安装 `pip-tools`，提交会被阻止**（勿用 `--no-verify` 绕过，CI 会拦截不同步的锁文件）。
+> - 依赖的**唯一来源**是 [`pyproject.toml`](pyproject.toml)：**新增/移除依赖只改这里**，然后用 `uv sync` 或 `pip install -e .` 安装。
+> - [`requirements.txt`](requirements.txt) 是 **pip-compile 生成的锁文件（生成产物）**，**请勿手动编辑**，也不要用它来增删依赖；它只是给 pip 用户的一份可复现版本快照。
+> - `uv.lock` 是本机 `uv` 自动生成的锁文件，**不跟踪**。
+> - 开发依赖（`pip-tools` / `ruff` / `pytest` / `responses`）pin 版本声明在 `pyproject.toml` 的 `dev` 组，**普通用户不需要**。
+> - 修改 `pyproject.toml` 后，`pre-commit` 钩子在提交时自动用 `pip-compile` 重新生成并暂存 `requirements.txt`；**若本机未安装 `pip-tools`，提交会被阻止**（勿用 `--no-verify` 绕过，CI 会拦截不同步的锁文件）。
 > - 如需手动重新生成（确保 `pip-tools` 已安装；`PIP_CONFIG_FILE=/dev/null` 用于隔离本机镜像配置，避免个人 pip 源写进锁文件）：
 >
 >   ```bash
@@ -358,7 +372,8 @@ Invoke-WebRequest -Uri "http://localhost:9000/mock/add_message" `
 | `/api/send_audio` | POST | 发送音频（JSON body 传 `file_path` + `voice_length`） |
 | `/api/refresh` | POST | 刷新会话（重新读取 tokens.json 或重新登录） |
 | `/api/config/reload` | POST | 热重载 `config.json`（无需重启；重新应用日志级别，API Key/长消息策略/拆分正则/mock 路由即时生效） |
-| `/api/execute` | POST | 执行命令（白名单限制，仅允许 `getpass`、`发送音乐` 前缀） |
+
+> 路径 B 不提供命令执行接口：以 `/` 开头的留言只在路径 A（`main.py`）里被解释为命令。
 
 ### 长消息处理（`/api/send`）
 
@@ -373,11 +388,14 @@ Invoke-WebRequest -Uri "http://localhost:9000/mock/add_message" `
 ```json
 {
   "status": "ok",
+  "seewoCode": 200,
   "strategy": "truncate",
   "truncated": true,
   "message": "发送成功"
 }
 ```
+
+> 响应里的 `seewoCode` 是**希沃业务码**（不是 HTTP 状态码，两者是两套体系）：`200` 成功、`40000` 业务拒绝（如超 200 字）、`-500`/`-505` Token 失效。若遇到 Token 失效，服务端会先自动刷新会话并重发一次；仍失效则返回 `401` + `need_login: true`，由客户端引导重新扫码。
 
 #### 策略 2：`split` —— 智能拆分多条
 
@@ -402,15 +420,17 @@ Invoke-WebRequest -Uri "http://localhost:9000/mock/add_message" `
 
 ---
 
-## 命令执行（以 `/` 开头的留言）
+## 命令执行（以 `/` 开头的留言，仅路径 A）
 
-当 `main.py`（路径 A）或 `/api/execute`（路径 B）收到**以 `/` 开头**的留言时，会尝试执行命令。受白名单限制，目前允许以下前缀：
+只有 `main.py`（路径 A）会把**以 `/` 开头**的留言当作命令处理：
 
 | 命令 | 用法 | 功能 |
 | --- | --- | --- |
 | `/getpass` | `/getpass <schoolUid> <snCode>` | 获取离线验证码，结果直接作为回复发回 |
 | `/发送音乐` | `/发送音乐` | 把项目下 `music/` 目录里的所有音频文件逐条发出（目录不存在会自动创建） |
-| 其他 | 任意 shell 命令 | `main.py` 中会直接 `os.popen()` 执行并把 stdout 发回；**路径 B 的 `/api/execute` 出于安全考虑已禁用**，白名单外返回 403 |
+| 其他 | 任意 shell 命令 | 直接 `os.popen()` 执行并把 stdout 发回（仅限你自己机器上的终端用户使用） |
+
+> **路径 B（`api_server.py` + 客户端）不提供命令执行接口**：原先的 `/api/execute` 已移除，任意命令执行能力不再经 HTTP 暴露。需要命令功能时请直接运行路径 A 的 `main.py`，或使用 `yunban_cli.py` 等本机脚本。
 
 ---
 
@@ -465,11 +485,12 @@ seewo_robot/
 ├── init.py              # [共享] 全局初始化：读取 config.json、URL 集合、Mock 切换
 ├── qrcode.py            # [共享] 终端二维码渲染
 │
-├── test/                # [测试] 测试脚本目录（test_api.py 等）
+├── test/                # [测试] 手工联调脚本（test_api.py 等，需服务在跑）
+├── tests/               # [测试] pytest 用例（离线，uv run pytest）
 │
 ├── pyproject.toml       # [元] 项目元数据与依赖声明（仅在此声明依赖）
-├── uv.lock              # [元] uv 依赖锁定版本
-├── requirements.txt     # [元] 用做锁文件（生成产物，勿手改；pip install -r 用）
+├── uv.lock              # [本机] uv 锁文件（不入库，.gitignore 已忽略）
+├── requirements.txt     # [元] pip 锁文件（pip-compile 生成的快照，勿手改）
 ├── config.json.example  # [配置] 配置文件示例
 │
 ├── AGENTS.md            # 🤖 给 AI 助手的完整项目上下文 + 开发规范

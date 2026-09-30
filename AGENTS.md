@@ -9,8 +9,11 @@
 ## 快速开始（拿到代码后）
 
 ```bash
-# 1. 安装依赖（uv 优先）
-uv sync          # 或 pip install -r requirements.txt
+# 1. 安装依赖（推荐使用 uv）
+# 用户
+uv sync          # 或 pip install -e
+# 贡献者
+uv sync --extra dev          # 或 pip install -e ".[dev]"
 
 # 2. 复制配置
 cp config.json.example config.json   # PowerShell: Copy-Item
@@ -34,10 +37,10 @@ uv run python test/test_api.py    # 逐个测试所有 API 端点
 
 ### 依赖管理约定（硬性）
 
-- 依赖的**唯一真源**是 `pyproject.toml`；新增/移除依赖只改这里，改完无需手动动 `requirements.txt`。
-- `requirements.txt` 在此作为**锁文件（生成产物），不可手改**，仅作为非 uv 环境的 `pip install -r requirements.txt` 兼容快照。
-- 生成器**唯一锁定 `pip-compile`**（来自 `pip-tools`），不再用 uv 导出；dev 工具（`pip-tools` / `ruff` / `pytest`）版本 pin 在 `pyproject.toml` 的 `dev` 组。
-- `pre-commit` 钩子（`scripts/hooks/pre-commit`）：**对所有暂存的 `.py` 执行 `ruff format` 并重新暂存**（幂等）；涉 `pyproject.toml` / `uv.lock` 的变更再用 `pip-compile` 自动重新生成 `requirements.txt` 并暂存。**若本机缺 `ruff` 或 `pip-tools` 则 `exit 1` 阻止提交**（勿 `--no-verify` 绕过）。
+- 依赖的**唯一真源**是 `pyproject.toml`；新增/移除依赖只改这里，改了之后用 `uv sync` 或 `pip install -e ".[dev]"` 安装，**不通过 `requirements.txt` 管理依赖**。
+- `requirements.txt` 是 **pip-compile 生成的锁文件（生成产物），不可手改、不作为依赖清单**；它只是给 pip 用户的可复现版本快照。文档一律引导用户用 `pyproject.toml` 装依赖。
+- `uv.lock` **不跟踪**，由本机 `uv sync` 自动生成；不要把它当作跨环境版本依据。
+- `pre-commit` 钩子（`scripts/hooks/pre-commit`）：**对所有暂存的 `.py` 执行 `ruff format` 并重新暂存**（幂等）；暂存了 `pyproject.toml` 时再用 `pip-compile` 自动重新生成 `requirements.txt` 并暂存。**若本机缺 `ruff` 或 `pip-tools` 则 `exit 1` 阻止提交**（勿 `--no-verify` 绕过）。
 - [`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在 PR 上用与 hook 完全一致的 `pip-compile` 重新生成并对比，拦截任何绕过本机 hook 的锁文件不同步提交；ruff 的 **lint 检查（`ruff check`）当前以注释占位**，将来启用后在此统一执行。格式化为强约束：`ruff format` 已由 pre-commit 在本地强制，PR 的格式问题应在提交前即被拦截。
 
 ## 两条独立运行路径（最高优先级约束）
@@ -118,8 +121,8 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 - **[init.py](init.py)**：全局配置 `config`（`models.Config` dataclass，可变）、`reload_config()`（重读 config.json 原地更新以支持热重载）、文件路径、`_use_mock`、公共请求头 `headers_nocookie`、希沃 URL 集合 `urls`。所有状态文件路径（`config.json`/`tokens.json`/`uploads.json`/`qrcode.png`）由 `project_path()` 基于 `__file__` 锚定到项目根目录，不依赖进程当前工作目录。
 - **[login.py](login.py)**：`acc` 账户对象 + `download_qrcode` / `check_qrcode` / `login` 流程。`acc(auto_login=True/False)` 控制过期时是否自动触发扫码：`main.py` 用 True，`api_server.py` 用 False。
 - **[stu.py](stu.py)**：学生信息 DAO，默认 `count=0` 取列表第一个学生
-- **[funcs.py](funcs.py)**：工具函数。`CHAT_LOG_FILE` 根据 `_use_mock` 切换 `chat_history_mock.json` / `chat_history.json`。`load_chat_history() -> list[Message]`、`append_message` / `merge_messages(messages: list[Message])` 只维护 `messages` 字段，不维护 `earliest_id` / `last_id`。
-- **[upload.py](upload.py)**：文件上传到希沃云存储接口，返回 `downloadUrl`。
+- **[funcs.py](funcs.py)**：工具函数。`chat_log_file()` 每次调用即时按 `config.use_mock` 返回 `chat_history_mock.json` / `chat_history.json` 路径（**不要缓存成模块常量**，配置读后即过期）。`load_chat_history() -> list[Message]`、`append_message` / `merge_messages(messages: list[Message])` 只维护 `messages` 字段，不维护 `earliest_id` / `last_id`；`merge_messages` **不去重**（同 id 重复传入会重复落盘，调用方自行保证）。
+- **[upload.py](upload.py)**：文件上传的唯一实现 `upload_file(account, file, type=None) -> downloadUrl`（`main.py` / `upload_file.py` / `api_server.py` 都调它，不要各自重复封装）。`type=None` 时按扩展名用 stdlib `mimetypes` 推导 Content-Type（显式传入的值优先）；上传失败时 `downloadUrl` 保持空串、失败原因在 `error`。
 - **[yunban.py](yunban.py)**：云班功能扩展（班级列表、考勤事件、签到等）。多数方法走独立的 campus 云班 REST 端点（`/api/classmember` / `kidnote` / `attendance`），**直接 `requests.request`，绕过 `request_manager`**（无统一节流，调用方需自行控制频率）。各 get 函数返回数据模型（`YunbanClass` 等）。`getpass` 获取离线验证码、`getpass2` 监听剪贴板（依赖 `pyperclip`）。
 - **[qrcode.py](qrcode.py)**：终端二维码渲染（依赖 `pillow`）。
 
@@ -131,9 +134,9 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 | --- | --- | --- | --- |
 | `/api/status` | GET | — | 服务状态 + 学生信息 |
 | `/api/messages` | GET | `datasource.fetch_latest(count)` | 实时向希沃取最新一页，**不持久化** |
-| `/api/send` | POST | `session.stu_msg.send` | 文本发送，支持长消息 `strategy` |
-| `/api/send_image` | POST | `upload_file_to_cloud` + `stu_msg.send` | 图片发送 |
-| `/api/send_audio` | POST | `upload_file_to_cloud` + `stu_msg.send` | 音频发送 |
+| `/api/send` | POST | `_send()` → `session.stu_msg.send` | 文本发送，支持长消息 `strategy`；响应带 `seewoCode`（希沃业务码）；`-500/-505` 自动刷新会话后重发一次，仍失效则 401 `need_login` |
+| `/api/send_image` | POST | `upload_file_to_cloud` + `_send()` | 图片发送；发送失败返回 500（不再一律回 ok） |
+| `/api/send_audio` | POST | `upload_file_to_cloud` + `_send()` | 音频发送（先发文件名，再发音频） |
 | `/api/history` | GET | `datasource.load_local(offset, limit)` | 读本地缓存，分页 |
 | `/api/load_earlier` | GET | `datasource.load_earlier_from_local(before_id, count)` | 纯本地读更早消息（不请求希沃，靠 `sync_all` 提前同步） |
 | `/api/sync_all` | POST | `datasource.sync_all(batch_size, delay)` | 全量同步历史到本地（防风控） |
@@ -141,7 +144,8 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 | `/api/config/reload` | POST | `init.reload_config()` | 热重载 config.json：原地更新全局 config + 重应用日志级别（API Key/长消息策略/拆分正则/mock 路由即时生效） |
 | `/api/login/qrcode` | GET | `download_qrcode` + 后台 `_poll_login` 线程 | 获取登录二维码（Base64），同时启动后台轮询（不阻塞服务） |
 | `/api/login/status` | GET | — | 查询扫码状态（`idle` / `pending` / `ok` / `error`） |
-| `/api/execute` | POST | `os.popen` | 执行命令（受 `allowed_prefixes` 白名单限制：`getpass`、`发送音乐`） |
+
+> 路径 B **不提供命令执行接口**：原 `/api/execute` 已移除（任意命令执行不再经 HTTP 暴露）。以 `/` 开头的留言仅在路径 A（`main.py`）里被解释为命令。
 
 ## 核心数据约定
 
@@ -182,6 +186,7 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 | `RawMessage` | ✅ frozen+slots | 希沃原始消息（`msg.get().result` 列表元素），只读，字段缺失用默认值兜底（`senderType` 默认 `"unknown"`、`type` 默认 `1` 等，对齐原 `dict.get(key, default)` 行为） |
 | `Message` | ❌ 只 slots，**可变** | 格式化后消息（`chat_history.json` 存储 / `message_service._messages` 缓存）。可变是为方便 `load_local` 补 `senderName`（直接 `m.senderName = name`，不必 `replace`）。`type` 标注 `int \| str`：保留 main.py 写`str(msg_type)` / message_service 写 int 的既有混合行为 |
 | `MessageResponse` | ✅ frozen+slots | `msg.get` 的响应包装（含 `result: list[RawMessage]`）。容器只读，但 `result` 是 list 自身可变 |
+| `SendResult` | ✅ frozen+slots | 发送类操作结果（`msg.send` / `yunban.send_msg`）：`ok` / `seewo_code`（希沃业务码）/ `http_status`（HTTP 码）/ `message`，两套码分开存放。`__bool__` 委托 `ok`，故既有 `if result:` 写法仍正确；`needs_relogin` / `is_business_reject` 谓词封装语义 |
 | `Config` | ❌ 只 slots，**可变** | `config.json` 数据模型。可变是为了让 `init.reload_config()` 原地更新实现热重载。typed 字段覆盖已知配置项，未建模的原始键收集到 `extra` 保留，`banPaiConfig` 映射为 `ban_pai_config` dict 字段 |
 | `YunbanClass` | ✅ frozen+slots | 云班班级（`getclasslist` 返回元素，含 uid/name/roomUid/schoolUid 等） |
 | `YunbanStudent` | ✅ frozen+slots | 云班学生（`getstulist` 返回元素，含 name/sid/uid/gender/卡号等） |
@@ -227,15 +232,29 @@ encode_data = {"action": type, "params": pxencode(params)}
 
 响应体是 `{"data": "scData:<base64>", "statusCode": ..., ...}`，`funcs.pxdecode(resp)` 取 `data[7:]` 后 base64 解码得到真实 JSON。
 
-### 希沃 statusCode 语义
+### 状态码约定（三套码，禁止混用）
+
+`models.py` 是状态码语义的**唯一约定处**，不要在其它模块重复写字面量：
+
+| 家族 | 定义处 | 取值 | 用途 |
+| --- | --- | --- | --- |
+| 希沃业务码 | `models.SeewoCode` | `OK=200` / `TOKEN_INVALID=-500` / `TOKEN_EXPIRED=-505` / `BUSINESS_REJECTED=40000` / `SERVER_ERROR=50000` | 响应体 `statusCode` 字段，表示业务结果 |
+| 扫码登录码 | `models.SeewoQrCode` | `WAITING=200` / `SCANNED=201` / `CONFIRMED=202` | 仅 `pcCheckQrcode` 的扫码进度 |
+| HTTP 状态码 | `requests` 的 `response.status_code` | 200/400/429/502… | 仅表示传输层结果 |
+
+判定一律走谓词，不要自己比较数字：`SeewoCode.is_ok(code)` / `SeewoCode.is_relogin_code(code)` / `SeewoCode.is_business_reject(code)`；`SendResult` 上的 `needs_relogin` / `is_business_reject` 属性同理。
+
+各码处理约定：
 
 | code | 含义 | 处理 |
 | --- | --- | --- |
 | 200 | 成功 | 正常返回 |
-| -500 | Token 无效 | 重新登录 |
-| -505 | Token 过期 | 重新登录 |
-| 40000 | 业务校验失败（如留言超 200 字） | 客户端层修复 |
+| -500 / -505 | Token 无效 / 过期 | 刷新会话后重发**一次**（服务端未写入，重发安全）；仍失效 → 401 `need_login` |
+| 40000 | 业务校验失败（如留言超 200 字） | 不重试，把原因返回给调用方 |
 | 50000 | 服务器内部错误（如 SQL 错误） | 检查请求参数（如 `start<1` 触发） |
+
+**两套码不得互相赋值**：`SendResult` 里 `seewo_code` 与 `http_status` 分开存放，
+形如 `body.get("statusCode", response.status_code)` 的写法会把 502（HTTP）写成业务码，已被禁止。
 
 ### 关键 action 名速查
 
@@ -304,7 +323,7 @@ encode_data = {"action": type, "params": pxencode(params)}
   - `start` 是 1-based 页码，`start<1` 触发 SQL 语法错误（`statusCode=50000`，对齐生产 MyBatis 行为）
   - 页内按 id 升序（旧→新），页间无重叠
 - **云班 REST 对齐已统一**：生产实测云班同一模块跨 v1~v5 版本均存活（版本号不敏感），mock 用 `<int:version>` 通配；`classmember`/`kidnote`/`attendance` 各端点返回结构已按新模型对齐（`kidnote` 留言返回分页 `{page,pageSize,result,totalCount}`、家长计数返回 `YunbanParent` 列表、事件用 `name` 字段、班级含 `schoolUid/schoolName/schoolType`）。内置孩子的家长表存于 `mock_data.parents`（按 child_uid 索引）。
-- **聊天记录隔离**：mock 模式下 `funcs.py` 自动把 `CHAT_LOG_FILE` 切到 `chat_history_mock.json`，避免测试数据污染真实 `chat_history.json`。
+- **聊天记录隔离**：mock 模式下 `funcs.chat_log_file()` 自动切到 `chat_history_mock.json`（每次调用即时读 `config.use_mock`），避免测试数据污染真实 `chat_history.json`。
 - **UID 自动适配**：mock 遇到未知家长 UID 时自动接管 `mock_parent_001` 的身份和消息，无需手动配置。
 
 ## 开发模式（典型代码模板）
@@ -383,7 +402,7 @@ def xxx():
 
 - **客户端连不上**：检查 `api_server` 是否启动、`api_port` 配置、`api_key` 是否一致
 - **Token 过期**：删 `tokens.json` 重新扫码；路径 B 调 `/api/login/qrcode` + `/api/login/status`。
-- **mock 数据污染真实记录**：检查 `funcs.py:CHAT_LOG_FILE` 是否正确切换；任何新代码必须用 `funcs.CHAT_LOG_FILE` 不要硬编码。
+- **mock 数据污染真实记录**：检查 `funcs.chat_log_file()` 是否随 `config.use_mock` 切换；任何新代码必须用 `funcs.chat_log_file()` 不要硬编码、也不要缓存成模块常量。
 - **HTTP 429 风控**：`request_manager` 自动退避重试 3 次；若仍失败，提高 `MIN_INTERVAL` 或 `sync_all` 的 `delay` 参数。
 - **顺序错乱**：检查是否漏了 `sort(key=lambda m: m["id"])`。
 
@@ -412,7 +431,7 @@ def xxx():
 
 ### 不得硬编码状态文件名
 
-所有状态文件（`config.json` / `tokens.json` / `uploads.json` / `chat_history*.json` / `qrcode.png` / `logs/`）都必须通过 `init.project_path()` 或 `funcs.CHAT_LOG_FILE` / 现有常量引用，**禁止在代码里直接写文件名或相对路径**。路径已由 `project_path()` 基于 `__file__` 锚定到项目根目录，硬编码会破坏该锚定、且无法在 mock 模式下自动切换。
+所有状态文件（`config.json` / `tokens.json` / `uploads.json` / `chat_history*.json` / `qrcode.png` / `logs/`）都必须通过 `init.project_path()` 或 `funcs.chat_log_file()` / 现有常量引用，**禁止在代码里直接写文件名或相对路径**。路径已由 `project_path()` 基于 `__file__` 锚定到项目根目录，硬编码会破坏该锚定、且无法在 mock 模式下自动切换。
 
 ### 配置读后即过期，禁止缓存复用
 
@@ -436,8 +455,11 @@ def xxx():
 
 - [auto_attend.py](auto_attend.py) 粗糙非生产级：硬编码 `classlist[35]`；事件选择靠 `sys.argv[1]` + `events[1]` 回退，`events` 为空时与 owner 原版一样照常 `IndexError` 崩溃。依赖模块 `yunban_token` 能连生产取数。
 - [yunban.py](yunban.py) 的所有请求**直接 `requests.request`，绕过 `request_manager`**：无统一节流 / 429 退避。批量取出全部班级、逐班取学生、批量签到等高频场景需调用方自行 `time.sleep` 防风控（503/504）。
-- [message_service.py:157-159](message_service.py#L157-L159) 的 `if delay > request_manager.MIN_INTERVAL` 是耦合传输层细节的实现，理想做法是直接 `time.sleep(delay)` 让 request_manager 节流叠加，或完全移除让 request_manager 单独节流
-- **uploads.json 按纯文件名做 key，同名覆盖**：写入逻辑在 [upload.py#L121-L122](upload.py#L121-L122)，key 只取 `os.path.basename(file)`，不区分完整路径、不区分家长账号。同一个 basename 的文件重复上传（哪怕路径不同、账号不同、内容不同），后写的都会直接覆盖前一条。影响范围有限：主业务链路（上传 → 发送留言）走内存中的 `downloadUrl`，不读这份台账，因此不会导致发错、漏发；只会影响"事后手动打开 uploads.json 按文件名翻历史上传 URL"的查询场景。暂时不打算改文件格式（避免破坏已按旧 dict 格式写了解析逻辑的其他开发者脚本），如要修复需提前发布变更公告。
+- [message_service.py:195](message_service.py#L195) 的 `if delay > request_manager.MIN_INTERVAL` 是耦合传输层细节的实现，理想做法是直接 `time.sleep(delay)` 让 request_manager 节流叠加，或完全移除让 request_manager 单独节流
+- **聊天记录损坏 = 启动即失败（已修，故意不吞异常）**：`funcs.load_chat_history()` 遇到「文件存在但无法解析」会抛 `CorruptChatHistoryError`，让服务启动时立刻崩掉。原因：读容错（返回 `[]`）+ [append_message](funcs.py) 的「读 → 追加 → 全量覆盖」会把损坏当空记录，一次追加就把全部历史覆盖成 1 条新消息（已实测复现）。恢复方式：修复或删除损坏文件后重启，再用 `sync_all` 重新拉取全量。
+- **upload policy 的 `expireSeconds` 字段位置待生产验证**：客户端读 `data.expireSeconds`（[upload.py](upload.py)），mock 写在 `policyList[0].expireSeconds`（[mock_server.py](mock_server.py)），二者必有一错 → mock 模式下文件上传目前走不通。探针脚本：`tmp/probe_upload_policy.py`（只取策略、不上传）。用例 `tests/test_upload.py::test_mock_server_policy_matches_client_expectations` 已 skip
+- **上游错误处理尚未体系化**：已完成「请求超时（`request_manager.TIMEOUT`）」「状态码语义统一到 `models.SeewoCode` / `SeewoQrCode` + `SendResult` 分存 `seewo_code`/`http_status`」「`-500/-505` 刷新会话后重发一次」「媒体端点不再吞掉发送失败」「`Upload` 策略失败降级」「上传实现合并为 `upload.upload_file` 单一入口」。仍待计划：`login.py` 的 4 处裸 `requests.get` 无超时；`msg.send` / handler 用 `print`/无日志，失败不可观测；错误类型未建模为异常体系（DAO 层返回结果对象而非抛异常）
+- **uploads.json 按纯文件名做 key，同名覆盖**：写入逻辑在 [upload.py#L140](upload.py#L140)，key 只取 `os.path.basename(file)`，不区分完整路径、不区分家长账号。同一个 basename 的文件重复上传（哪怕路径不同、账号不同、内容不同），后写的都会直接覆盖前一条。影响范围有限：主业务链路（上传 → 发送留言）走内存中的 `downloadUrl`，不读这份台账，因此不会导致发错、漏发；只会影响"事后手动打开 uploads.json 按文件名翻历史上传 URL"的查询场景。暂时不打算改文件格式（避免破坏已按旧 dict 格式写了解析逻辑的其他开发者脚本），如要修复需提前发布变更公告。
 
 ## 数据文件清单
 
