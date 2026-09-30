@@ -1,17 +1,11 @@
 # -*- coding: utf-8 -*-
+"""一次性登录并上传单个文件到希沃云存储（实现见 upload.upload_file）。"""
 
 import os
 from sys import argv
 
 from login import acc
-from upload import Upload
-
-
-def upload_file(account: acc, file, type="image/png"):
-    up = Upload(account)
-    up.upload(file=file, type=type)
-    return up.downloadUrl
-
+from upload import upload_file
 
 if __name__ == "__main__":
     account = acc()

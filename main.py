@@ -14,7 +14,7 @@ from login import acc
 from funcs import load_chat_history, append_message, datenow, logw
 from stu import stu
 from msg import msg
-from upload import Upload
+from upload import upload_file
 from yunban import getpass
 from init import config
 
@@ -24,13 +24,6 @@ if account.token_expired:  # 超过最大重试次数，登录失败
     exit(1)
 student = stu(account)
 stu_msg = msg(account, student)
-
-
-def upload_file(account: acc, file, type="image/png"):
-    """上传文件到云存储并返回下载 URL"""
-    up = Upload(account)
-    up.upload(file=file, type=type)
-    return up.downloadUrl
 
 
 def send_msg(send: str):
