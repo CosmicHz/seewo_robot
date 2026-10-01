@@ -30,6 +30,7 @@ class TestApiKey:
             ("get", "/api/status"),
             ("get", "/api/messages"),
             ("get", "/api/history"),
+            ("get", "/api/load_earlier"),
             ("post", "/api/send"),
             ("post", "/api/refresh"),
             ("post", "/api/config/reload"),
@@ -64,7 +65,6 @@ class TestSessionCheck:
             ("get", "/api/messages", None),
             ("post", "/api/send", {"content": "x"}),
             ("post", "/api/sync_all", {}),
-            ("get", "/api/load_earlier", None),
         ],
     )
     def test_expired_token_asks_for_login(
@@ -79,12 +79,17 @@ class TestSessionCheck:
         assert payload["status"] == "error"
 
     @pytest.mark.parametrize(
-        ("method", "path"), [("get", "/api/history"), ("post", "/api/config/reload")]
+        ("method", "path"),
+        [
+            ("get", "/api/history"),
+            ("get", "/api/load_earlier"),
+            ("post", "/api/config/reload"),
+        ],
     )
     def test_local_only_endpoints_work_without_login(
         self, app_env, auth_headers, method, path
     ):
-        """history / config reload 不依赖希沃会话，Token 过期也应可用"""
+        """本地历史与配置接口不依赖希沃会话，Token 过期也应可用"""
         client, fake = app_env
         _expired(fake)
         assert getattr(client, method)(path, headers=auth_headers).status_code == 200
@@ -487,6 +492,16 @@ class TestLoadEarlier:
         assert payload["messages"] == []
         assert payload["has_more"] is False
         assert payload["message"] == "暂无消息"
+
+    def test_expired_token_can_read_local_history(
+        self, app_env, auth_headers, chat_file
+    ):
+        client, fake = app_env
+        self._seed(chat_file, range(1, 4))
+        _expired(fake)
+        resp = client.get("/api/load_earlier?count=2", headers=auth_headers)
+        assert resp.status_code == 200
+        assert [m["id"] for m in resp.get_json()["messages"]] == [2, 3]
 
     def test_cursor_before_oldest_returns_empty(self, app_env, auth_headers, chat_file):
         client, _ = app_env

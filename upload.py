@@ -86,80 +86,95 @@ class Upload:
             return None
         if type is None:
             type = mimetypes.guess_type(file)[0] or "application/octet-stream"
-        data = {
-            "key": (None, self.res["data"]["policyList"][0]["formFields"][0]["value"]),
-            "policy": (
-                None,
-                self.res["data"]["policyList"][0]["formFields"][1]["value"],
-            ),
-            "q-signature": (
-                None,
-                self.res["data"]["policyList"][0]["formFields"][2]["value"],
-            ),
-            "q-key-time": (
-                None,
-                self.res["data"]["policyList"][0]["formFields"][3]["value"],
-            ),
-            "q-ak": (None, self.res["data"]["policyList"][0]["formFields"][4]["value"]),
-            "q-sign-algorithm": (
-                None,
-                self.res["data"]["policyList"][0]["formFields"][5]["value"],
-            ),
-            "callback": (
-                None,
-                self.res["data"]["policyList"][0]["formFields"][6]["value"],
-            ),
-            "success_action_status": (
-                None,
-                self.res["data"]["policyList"][0]["formFields"][7]["value"],
-            ),
-            "x:appid": (
-                None,
-                self.res["data"]["policyList"][0]["formFields"][8]["value"],
-            ),
-            "x:sessionid": (
-                None,
-                self.res["data"]["policyList"][0]["formFields"][9]["value"],
-            ),
-            "x:bucketid": (
-                None,
-                self.res["data"]["policyList"][0]["formFields"][10]["value"],
-            ),
-            "file": (
-                "IMG_" + str(random.randrange(0, 1000)) + ".PNG",
-                open(file, "rb"),
-                type,
-            ),
-        }
-        boundary = "----WebKitFormBoundary" + "".join(
-            random.sample(string.ascii_letters + string.digits, 16)
-        )
-        multipart = MultipartEncoder(fields=data, boundary=boundary)
-        self.headers["Content-Type"] = multipart.content_type
+        response = None
         try:
-            response = requests.post(
-                self.uploadUrl,
-                headers=self.headers,
-                data=multipart,
-                timeout=(self.expiretime - time.time()),
-            )
-            uploaded = json.loads(response.text)
-            if uploaded["code"] == 0:
-                self.isupload = True
-                self.downloadUrl = uploaded["data"]["downloadUrl"]
-                uploads = json.loads(read_file(uploads_file))
-                uploads[os.path.basename(file)] = uploaded["data"]
-                write_file(
-                    uploads_file,
-                    json.dumps(
-                        uploads, indent=4, sort_keys=True, ensure_ascii=False
-                    ).encode(),
+            with open(file, "rb") as file_handle:
+                data = {
+                    "key": (
+                        None,
+                        self.res["data"]["policyList"][0]["formFields"][0]["value"],
+                    ),
+                    "policy": (
+                        None,
+                        self.res["data"]["policyList"][0]["formFields"][1]["value"],
+                    ),
+                    "q-signature": (
+                        None,
+                        self.res["data"]["policyList"][0]["formFields"][2]["value"],
+                    ),
+                    "q-key-time": (
+                        None,
+                        self.res["data"]["policyList"][0]["formFields"][3]["value"],
+                    ),
+                    "q-ak": (
+                        None,
+                        self.res["data"]["policyList"][0]["formFields"][4]["value"],
+                    ),
+                    "q-sign-algorithm": (
+                        None,
+                        self.res["data"]["policyList"][0]["formFields"][5]["value"],
+                    ),
+                    "callback": (
+                        None,
+                        self.res["data"]["policyList"][0]["formFields"][6]["value"],
+                    ),
+                    "success_action_status": (
+                        None,
+                        self.res["data"]["policyList"][0]["formFields"][7]["value"],
+                    ),
+                    "x:appid": (
+                        None,
+                        self.res["data"]["policyList"][0]["formFields"][8]["value"],
+                    ),
+                    "x:sessionid": (
+                        None,
+                        self.res["data"]["policyList"][0]["formFields"][9]["value"],
+                    ),
+                    "x:bucketid": (
+                        None,
+                        self.res["data"]["policyList"][0]["formFields"][10]["value"],
+                    ),
+                    "file": (
+                        "IMG_" + str(random.randrange(0, 1000)) + ".PNG",
+                        file_handle,
+                        type,
+                    ),
+                }
+                boundary = "----WebKitFormBoundary" + "".join(
+                    random.sample(string.ascii_letters + string.digits, 16)
                 )
-                print("上传成功: " + self.downloadUrl)
-            else:
-                print("上传失败: " + response.text)
+                multipart = MultipartEncoder(fields=data, boundary=boundary)
+                self.headers["Content-Type"] = multipart.content_type
+                response = requests.post(
+                    self.uploadUrl,
+                    headers=self.headers,
+                    data=multipart,
+                    timeout=(self.expiretime - time.time()),
+                )
+                uploaded = json.loads(response.text)
+                if uploaded["code"] == 0:
+                    self.isupload = True
+                    self.downloadUrl = uploaded["data"]["downloadUrl"]
+                    uploads = json.loads(read_file(uploads_file))
+                    filename = os.path.basename(file)
+                    ledger_key = filename
+                    collision = 2
+                    while ledger_key in uploads:
+                        ledger_key = f"{filename}#{collision}"
+                        collision += 1
+                    record = dict(uploaded["data"])
+                    record.setdefault("filename", filename)
+                    uploads[ledger_key] = record
+                    write_file(
+                        uploads_file,
+                        json.dumps(
+                            uploads, indent=4, sort_keys=True, ensure_ascii=False
+                        ).encode(),
+                    )
+                    print("上传成功: " + self.downloadUrl)
+                else:
+                    print("上传失败: " + response.text)
         except Exception as e:
             self.error = f"上传请求异常: {e}"
             print("上传异常: " + self.error)
-            response = None
         return response

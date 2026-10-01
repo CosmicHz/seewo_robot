@@ -94,23 +94,27 @@ class TestGet:
         assert resp.statusCode == 50000
         assert resp.result == []
 
-    def test_unwrapped_error_response_raises_keyerror(self, http, dao):
-        """未知 action / 鉴权失败时响应体没有 data 字段，pxdecode 会 KeyError"""
+    def test_unwrapped_error_response_returns_business_error(self, http, dao):
+        """网关未包装业务错误时，返回明确的 MessageResponse 而不是泄漏 KeyError"""
         http.add(
             http.POST,
             mcampus_url(GET_NOTES),
             json={"statusCode": -500, "message": "token 无效"},
         )
-        with pytest.raises(KeyError):
-            dao.get(10)
+        response = dao.get(10)
+        assert response.statusCode == -500
+        assert response.message == "token 无效"
+        assert response.result == []
 
 
 class TestHelpers:
-    def test_get_id_returns_first_result_id(self, http, dao):
+    def test_get_id_returns_latest_result_id(self, http, dao):
         http.add(
-            http.POST, mcampus_url(GET_NOTES), json=px_wrap({"result": [_note(7)]})
+            http.POST,
+            mcampus_url(GET_NOTES),
+            json=px_wrap({"result": [_note(3), _note(9), _note(5)]}),
         )
-        assert dao.get_id(10) == 7
+        assert dao.get_id(10) == 9
 
     def test_get_id_returns_zero_when_empty(self, http, dao):
         http.add(http.POST, mcampus_url(GET_NOTES), json=px_wrap({"result": []}))
@@ -142,10 +146,12 @@ class TestHelpers:
 
     def test_get_content_warns_deprecated(self, http, dao):
         http.add(
-            http.POST, mcampus_url(GET_NOTES), json=px_wrap({"result": [_note(1)]})
+            http.POST,
+            mcampus_url(GET_NOTES),
+            json=px_wrap({"result": [_note(1), _note(9), _note(4)]}),
         )
         with pytest.warns(DeprecationWarning):
-            assert dao.get_content(10) == "消息1"
+            assert dao.get_content(10) == "消息9"
 
     def test_get_last_warns_deprecated(self, dao, monkeypatch):
         monkeypatch.setattr(
@@ -226,14 +232,16 @@ class TestSend:
 
 
 class TestDelete:
-    def test_deletes_first_message_id(self, http, dao):
+    def test_deletes_latest_message_id(self, http, dao):
         http.add(
-            http.POST, mcampus_url(GET_NOTES), json=px_wrap({"result": [_note(42)]})
+            http.POST,
+            mcampus_url(GET_NOTES),
+            json=px_wrap({"result": [_note(42), _note(77), _note(51)]}),
         )
         http.add(http.POST, mcampus_url(DELETE_NOTE), json={"statusCode": 200})
         assert dao.delete(10) is True
         action, params = decode_action_request(http.calls[-1].request.body)
-        assert action == DELETE_NOTE and params == {"ids": [42]}
+        assert action == DELETE_NOTE and params == {"ids": [77]}
 
     def test_invalid_token_returns_false(self, http, dao):
         http.add(

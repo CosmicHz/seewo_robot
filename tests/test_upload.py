@@ -131,8 +131,7 @@ class TestUpload:
         assert list(ledger) == ["照片.png"]
         assert ledger["照片.png"]["fileId"] == "f1"
 
-    def test_ledger_key_is_basename_only(self, cos, tmp_path, uploads_ledger):
-        """已知问题：台账按 basename 做 key，同名不同路径会互相覆盖"""
+    def test_ledger_preserves_colliding_basenames(self, cos, tmp_path, uploads_ledger):
         sub = tmp_path / "sub"
         sub.mkdir()
         cos.add(
@@ -160,8 +159,10 @@ class TestUpload:
         )
 
         ledger = json.loads(uploads_ledger.read_text(encoding="utf-8"))
-        assert list(ledger) == ["same.png"]
-        assert ledger["same.png"]["downloadUrl"] == "http://cdn/2.png"
+        assert list(ledger) == ["same.png", "same.png#2"]
+        assert ledger["same.png"]["downloadUrl"] == "http://cdn/1.png"
+        assert ledger["same.png#2"]["downloadUrl"] == "http://cdn/2.png"
+        assert ledger["same.png#2"]["filename"] == "same.png"
 
     def test_second_upload_on_same_instance_is_skipped(self, cos, tmp_path):
         cos.add(
