@@ -173,7 +173,7 @@ class TestEventTime:
         )
 
     def test_missing_config_raises(self, client):
-        with pytest.raises(json.JSONDecodeError):
+        with pytest.raises(ValueError, match="event.config"):
             client.geteventtime(YunbanEvent.from_dict({"config": ""}))
 
     def test_random_time_within_window(self, client, monkeypatch):

@@ -54,6 +54,9 @@ def post(url, headers, data):
         )
         if resp.status_code != 429:
             return resp
+        if attempt == 2:
+            logger.warning("HTTP 429 风控，重试次数已用尽(attempt=%d)", attempt)
+            return resp
         backoff = 2**attempt
         logger.warning("HTTP 429 风控，退避 %ds 重试(attempt=%d)", backoff, attempt)
         time.sleep(backoff)

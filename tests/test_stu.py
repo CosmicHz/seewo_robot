@@ -50,9 +50,9 @@ class TestInit:
         with pytest.raises(Exception, match="未添加学生"):
             stu_module.stu(FakeAccount())
 
-    def test_out_of_range_count_raises_index_error(self, http):
+    def test_out_of_range_count_raises_clear_index_error(self, http):
         _register_list(http, STUDENTS)
-        with pytest.raises(IndexError):
+        with pytest.raises(IndexError, match="student count out of range: 5"):
             stu_module.stu(FakeAccount(), count=5)
 
 
@@ -72,9 +72,10 @@ class TestSearch:
         assert result[0]["userUid"] == "u9"
 
 
-def test_add_stu_is_not_implemented(http):
-    """add_stu 目前是空实现（占位），不应产生任何请求"""
+def test_add_stu_is_explicitly_not_implemented(http):
+    """未确认真实接口前，add_stu 应明确报告未实现"""
     _register_list(http, STUDENTS)
     s = stu_module.stu(FakeAccount())
-    assert s.add_stu("u9") is None
+    with pytest.raises(NotImplementedError, match="adding students is not implemented"):
+        s.add_stu("u9")
     assert len(http.calls) == 1

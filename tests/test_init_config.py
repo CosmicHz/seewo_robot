@@ -63,16 +63,15 @@ class TestReloadConfig:
         monkeypatch.setattr(init, "CONFIG_FILE", str(path))
         return init.reload_config()
 
-    def test_updates_same_object_in_place(self, tmp_path, monkeypatch):
-        """必须原地更新，否则 `from init import config` 的消费方看不到热重载"""
-        before = init.config
+    def test_existing_consumer_sees_reloaded_value(self, tmp_path, monkeypatch):
+        """已有消费者引用的配置在热重载后仍能读到新值"""
+        consumer_config = init.config
         self._use(tmp_path, monkeypatch, '{"api_key": "hot-reloaded"}')
-        assert init.config is before
-        assert init.config.api_key == "hot-reloaded"
+        assert consumer_config.api_key == "hot-reloaded"
 
     def test_returns_updated_config(self, tmp_path, monkeypatch):
         cfg = self._use(tmp_path, monkeypatch, '{"api_port": 6002}')
-        assert cfg is init.config and cfg.api_port == 6002
+        assert cfg.api_port == 6002
 
     def test_rederives_mock_globals(self, tmp_path, monkeypatch):
         self._use(tmp_path, monkeypatch, '{"use_mock": true, "mock_port": 9333}')

@@ -284,7 +284,7 @@ class TestSyncAll:
         assert ds.sync_all(batch_size=10, delay=0)["synced_count"] == 0
 
     def test_no_sleep_when_delay_zero(self, chat_file, monkeypatch):
-        """delay 参数与 MIN_INTERVAL 耦合：delay<=MIN_INTERVAL 时不再额外等待"""
+        """delay=0 时不增加同步流程自身的等待"""
         slept = []
         monkeypatch.setattr(ms_module.time, "sleep", lambda s: slept.append(s))
         ds, _ = _ds_with(
@@ -297,17 +297,16 @@ class TestSyncAll:
         assert slept == []
 
     def test_sleeps_when_delay_exceeds_min_interval(self, chat_file, monkeypatch):
-        """已知耦合：sleep(delay - MIN_INTERVAL)，把传输层常量带进了数据源层"""
+        """delay 是同步流程额外增加的等待，与请求层节流相互独立"""
         slept = []
         monkeypatch.setattr(ms_module.time, "sleep", lambda s: slept.append(s))
-        monkeypatch.setattr(ms_module.request_manager, "MIN_INTERVAL", 0.5)
         ds, _ = _ds_with(
             get_impl=lambda count, start: {1: [raw_msg(9)], 2: [raw_msg(1)]}.get(
                 start, []
             )
         )
         ds.sync_all(batch_size=10, delay=2.0)
-        assert slept == [1.5]
+        assert slept == [2.0]
 
     def test_empty_upstream(self, chat_file):
         ds, _ = _ds_with(get_impl=lambda count, start: [])

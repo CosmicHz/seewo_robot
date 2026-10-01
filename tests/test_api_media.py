@@ -4,6 +4,8 @@
 上传动作打桩（upload_file_to_cloud），只验证端点自身的分支与参数传递。
 """
 
+from pathlib import Path
+
 import pytest
 
 from models import SendResult
@@ -17,7 +19,13 @@ def stubbed_upload(monkeypatch):
     calls = []
 
     def fake_upload(path, content_type="image/png"):
-        calls.append({"path": path, "type": content_type})
+        calls.append(
+            {
+                "path": path,
+                "type": content_type,
+                "exists_during_upload": Path(path).exists(),
+            }
+        )
         return f"http://cdn/{path.split(chr(92))[-1].split('/')[-1]}"
 
     monkeypatch.setattr(api_server, "upload_file_to_cloud", fake_upload)
@@ -51,7 +59,8 @@ class TestSendImage:
         ).get_json()
         assert payload["status"] == "ok"
         assert payload["url"] == "http://cdn/photo.png"
-        assert stubbed_upload == [{"path": str(picture), "type": "image/png"}]
+        assert stubbed_upload[0]["path"] == str(picture)
+        assert stubbed_upload[0]["type"] == "image/png"
         assert fake.stu_msg.sent[0]["type"] == 2
         assert fake.stu_msg.sent[0]["resUrl"] == "http://cdn/photo.png"
 
@@ -74,10 +83,10 @@ class TestSendImage:
         assert resp.status_code == 500
         assert fake.stu_msg.sent == []
 
-    def test_multipart_upload_saves_temp_file(
+    def test_multipart_upload_uses_and_cleans_temp_file(
         self, app_env, auth_headers, tmp_path, monkeypatch, stubbed_upload
     ):
-        """multipart 分支把文件存成 cwd 下的 temp_<文件名>（相对路径，已知问题，未改）"""
+        """multipart 文件在上传期间存在，请求结束后清理且不污染 cwd"""
         import io
 
         monkeypatch.chdir(tmp_path)
@@ -89,9 +98,36 @@ class TestSendImage:
             content_type="multipart/form-data",
         )
         assert resp.status_code == 200
-        assert stubbed_upload[0]["path"] == "temp_pic.png"
-        assert (tmp_path / "temp_pic.png").exists()
+        assert stubbed_upload[0]["exists_during_upload"] is True
+        assert not Path(stubbed_upload[0]["path"]).exists()
+        assert list(tmp_path.glob("temp_*")) == []
         assert fake.stu_msg.sent[0]["type"] == 2
+
+    def test_multipart_upload_cleans_temp_file_when_upload_raises(
+        self, app_env, auth_headers, tmp_path, monkeypatch
+    ):
+        import io
+        import api_server
+
+        seen = []
+
+        def failing_upload(path, content_type="image/png"):
+            seen.append(path)
+            assert Path(path).exists()
+            raise RuntimeError("upload unavailable")
+
+        monkeypatch.setattr(api_server, "upload_file_to_cloud", failing_upload)
+        monkeypatch.chdir(tmp_path)
+        client, _ = app_env
+        resp = client.post(
+            "/api/send_image",
+            headers=auth_headers,
+            data={"file": (io.BytesIO(b"png-bytes"), "pic.png")},
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 500
+        assert seen and not Path(seen[0]).exists()
+        assert list(tmp_path.glob("temp_*")) == []
 
     def test_multipart_without_file_rejected(self, app_env, auth_headers):
         client, _ = app_env
@@ -124,7 +160,7 @@ class TestSendAudio:
         )
         assert resp.status_code == 400
 
-    def test_sends_filename_then_audio(
+    def test_sends_one_audio_message_after_upload(
         self, app_env, auth_headers, tmp_path, stubbed_upload
     ):
         client, fake = app_env
@@ -134,18 +170,12 @@ class TestSendAudio:
             "/api/send_audio", headers=auth_headers, json={"file_path": str(audio)}
         ).get_json()
         assert payload["status"] == "ok"
-        assert stubbed_upload == [{"path": str(audio), "type": "audio/mp3"}]
-        assert len(fake.stu_msg.sent) == 2
-        assert fake.stu_msg.sent[0] == {
-            "content": "song.mp3",
-            "type": 1,
-            "resUrl": "",
-            "voiceLength": 0,
-            "resConfig": "",
-        }
-        assert fake.stu_msg.sent[1]["type"] == 3
-        assert fake.stu_msg.sent[1]["voiceLength"] == 666
-        assert fake.stu_msg.sent[1]["resUrl"] == "http://cdn/song.mp3"
+        assert stubbed_upload[0]["path"] == str(audio)
+        assert stubbed_upload[0]["type"] == "audio/mp3"
+        assert len(fake.stu_msg.sent) == 1
+        assert fake.stu_msg.sent[0]["type"] == 3
+        assert fake.stu_msg.sent[0]["voiceLength"] == 666
+        assert fake.stu_msg.sent[0]["resUrl"] == "http://cdn/song.mp3"
 
     def test_voice_length_override(
         self, app_env, auth_headers, tmp_path, stubbed_upload
@@ -158,7 +188,7 @@ class TestSendAudio:
             headers=auth_headers,
             json={"file_path": str(audio), "voice_length": 1234},
         )
-        assert fake.stu_msg.sent[1]["voiceLength"] == 1234
+        assert fake.stu_msg.sent[0]["voiceLength"] == 1234
 
     def test_upload_failure_returns_500(
         self, app_env, auth_headers, tmp_path, monkeypatch
@@ -177,7 +207,7 @@ class TestSendAudio:
             "/api/send_audio", headers=auth_headers, json={"file_path": str(audio)}
         )
         assert resp.status_code == 500
-        assert len(fake.stu_msg.sent) == 1  # 只有文件名那条发出去了
+        assert fake.stu_msg.sent == []
 
 
 class TestMediaErrorHandling:
