@@ -120,7 +120,7 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 - **[api_server.py](api_server.py)**：入口层，handler 薄层化。全局 `session = Session()` + 全局 `datasource = MessageDataSource(session)`（构造时仅 `_refresh` 读 mtime，不碰 session）。
 - **[init.py](init.py)**：全局配置 `config`（`models.Config` dataclass，可变）、`reload_config()`（重读 config.json 原地更新以支持热重载）、文件路径、`_use_mock`、公共请求头 `headers_nocookie`、希沃 URL 集合 `urls`。所有状态文件路径（`config.json`/`tokens.json`/`uploads.json`/`qrcode.png`）由 `project_path()` 基于 `__file__` 锚定到项目根目录，不依赖进程当前工作目录。
 - **[login.py](login.py)**：`acc` 账户对象 + `download_qrcode` / `check_qrcode` / `login` 流程。`acc(auto_login=True/False)` 控制过期时是否自动触发扫码：`main.py` 用 True，`api_server.py` 用 False。
-- **[stu.py](stu.py)**：学生信息 DAO，默认 `count=0` 取列表第一个学生
+- **[stu.py](stu.py)**：学生信息 DAO，不传 `child_uid` 时默认取关联列表第一个学生；按 `child_uid`（userUid）稳定标识选取，不再支持按下标选取（列表顺序不受服务端保证）
 - **[funcs.py](funcs.py)**：工具函数。`chat_log_file()` 每次调用即时按 `config.use_mock` 返回 `chat_history_mock.json` / `chat_history.json` 路径（**不要缓存成模块常量**，配置读后即过期）。`load_chat_history() -> list[Message]`、`append_message` / `merge_messages(messages: list[Message])` 只维护 `messages` 字段，不维护 `earliest_id` / `last_id`；`merge_messages` **不去重**（同 id 重复传入会重复落盘，调用方自行保证）。
 - **[upload.py](upload.py)**：文件上传的唯一实现 `upload_file(account, file, type=None) -> downloadUrl`（`main.py` / `upload_file.py` / `api_server.py` 都调它，不要各自重复封装）。`type=None` 时按扩展名用 stdlib `mimetypes` 推导 Content-Type（显式传入的值优先）；上传失败时 `downloadUrl` 保持空串、失败原因在 `error`。
 - **[yunban.py](yunban.py)**：云班功能扩展（班级列表、考勤事件、签到等）。多数方法走独立的 campus 云班 REST 端点（`/api/classmember` / `kidnote` / `attendance`），**直接 `requests.request`，绕过 `request_manager`**（无统一节流，调用方需自行控制频率）。各 get 函数返回数据模型（`YunbanClass` 等）。`getpass` 获取离线验证码、`getpass2` 监听剪贴板（依赖 `pyperclip`）。

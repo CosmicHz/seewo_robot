@@ -23,18 +23,25 @@ class stu:
         name: 学生姓名
     """
 
-    def __init__(self, acc: acc, count=0) -> None:
+    def __init__(self, acc: acc, child_uid: str | None = None) -> None:
         """
         Args:
             acc: 已登录的账户对象
-            count: 选择第几个关联学生（默认第一个）
+            child_uid: 目标学生的 userUid。不传时默认取关联列表的第一个学生；
+
+        Raises:
+            KeyError: child_uid 不在关联学生列表中
         """
         self.acc = acc
         students = self.info()
-        # 负数会走 Python 的倒数语义静默选错学生，必须显式拦截
-        if count < 0 or count >= len(students):
-            raise IndexError(f"student count out of range: {count}")
-        info = students[count]
+        if child_uid is None:
+            info = students[0]
+        else:
+            matched = [s for s in students if s.get("userUid") == child_uid]
+            if not matched:
+                valid = [s.get("userUid") for s in students]
+                raise KeyError(f"child_uid {child_uid!r} not in children list: {valid}")
+            info = matched[0]
         self.schoolUid = info["schoolUid"]
         self.classUid = info["classUid"]
         self.userUid = info["userUid"]

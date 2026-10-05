@@ -30,9 +30,16 @@ class TestInit:
             "测试学生",
         )
 
-    def test_count_selects_student(self, http):
+    def test_child_uid_selects_student(self, http):
+        """按稳定标识选取，与列表顺序无关"""
         _register_list(http, STUDENTS)
-        assert stu_module.stu(FakeAccount(), count=1).userUid == "u2"
+        assert stu_module.stu(FakeAccount(), child_uid="u2").userUid == "u2"
+        assert stu_module.stu(FakeAccount(), child_uid="u1").userUid == "u1"
+
+    def test_unknown_child_uid_raises_with_candidates(self, http):
+        _register_list(http, STUDENTS)
+        with pytest.raises(KeyError, match="'u9'.*u1.*u2"):
+            stu_module.stu(FakeAccount(), child_uid="u9")
 
     def test_sends_parent_id(self, http):
         _register_list(http, STUDENTS)
@@ -49,17 +56,6 @@ class TestInit:
         _register_list(http, [])
         with pytest.raises(Exception, match="未添加学生"):
             stu_module.stu(FakeAccount())
-
-    def test_out_of_range_count_raises_clear_index_error(self, http):
-        _register_list(http, STUDENTS)
-        with pytest.raises(IndexError, match="student count out of range: 5"):
-            stu_module.stu(FakeAccount(), count=5)
-
-    def test_negative_count_raises_not_last_student(self, http):
-        """负数不能走 Python 倒数语义静默选错学生"""
-        _register_list(http, STUDENTS)
-        with pytest.raises(IndexError, match="student count out of range: -1"):
-            stu_module.stu(FakeAccount(), count=-1)
 
 
 class TestSearch:
