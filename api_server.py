@@ -471,9 +471,13 @@ def send_image():
             if "file" not in request.files:
                 return jsonify({"status": "error", "message": "no file uploaded"}), 400
             file = request.files["file"]
+            # 扩展名仅取自原始文件名，且必须是合法的 ".ext" 形式，否则丢弃：
+            # basename 方法剥掉路径分隔符，正则白名单再挡掉 ".." 等目录穿越变体，
+            # 防止后缀拼到 mkstemp 路径后把写入位置引出临时目录。
             suffix = os.path.splitext(os.path.basename(file.filename or ""))[1]
             if not re.fullmatch(r"\.[A-Za-z0-9]{1,10}", suffix):
                 suffix = ""
+            # 保存到临时文件
             fd, temp_path = tempfile.mkstemp(prefix="seewo-upload-", suffix=suffix)
             os.close(fd)
             file_path = temp_path
@@ -504,7 +508,7 @@ def send_image():
     finally:
         if temp_path:
             try:
-                os.unlink(temp_path)
+                os.remove(temp_path)
             except FileNotFoundError:
                 pass
 
@@ -594,7 +598,10 @@ def get_history():
 @app.route("/api/load_earlier", methods=["GET"])
 @require_api_key
 def load_earlier_messages():
-    """加载更早的消息（滚动加载历史，纯本地读）
+    """加载更早的消息（滚动加载历史消息）
+
+    不检查与希沃的会话是否有效：本端点只读本地 chat_history 缓存、不请求希沃，
+    Token 过期时也应可用
 
     Query params:
         count: 获取数量，默认50

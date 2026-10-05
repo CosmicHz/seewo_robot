@@ -42,15 +42,14 @@ def send_msg(send: str):
 
 def send_audio(file):
     try:
+        stu_msg.send(os.path.basename(file), 1)
         url = upload_file(account, file)
-        if not url:
-            logw(f"[ERROR] 文件上传失败: {file}")
-            return
-        result = stu_msg.send("", 3, url, 666)
-        if not result:
-            logw(f"[ERROR] 发送音频失败: {result.message or result}")
+        if url:
+            stu_msg.send("", 3, url, 666)
+        else:
+            send_msg(f"[ERROR] 文件上传失败: {file}")
     except Exception as e:
-        logw(f"[ERROR] 发送音频失败: {e}")
+        send_msg(f"[ERROR] 发送音频失败: {e}")
 
 
 def handle_command(command_text: str):
