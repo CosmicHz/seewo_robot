@@ -111,7 +111,13 @@ class TestMessageResponse:
         assert all(isinstance(m, RawMessage) for m in resp.result)
 
     def test_from_dict_missing_result(self):
-        assert MessageResponse.from_dict({"statusCode": 200}).result == []
+        assert MessageResponse.from_dict({"statusCode": 200}).result == ()
+
+    def test_result_is_immutable_tuple(self):
+        resp = MessageResponse.from_dict({"statusCode": 200, "result": [{"id": 1}]})
+        assert isinstance(resp.result, tuple)
+        with pytest.raises(AttributeError):
+            resp.result.append("mutate")
 
 
 class TestConfig:
@@ -348,4 +354,4 @@ class TestYunbanParentAndNote:
 
     def test_notes_page_empty(self):
         page = YunbanNotesPage.from_dict({})
-        assert (page.page, page.result) == (0, [])
+        assert (page.page, page.result) == (0, ())

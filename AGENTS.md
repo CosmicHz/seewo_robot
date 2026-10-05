@@ -114,7 +114,7 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 
 - **[request_manager.py](request_manager.py)**：所有对希沃的 HTTP 请求**必须**经此调度。当前实现 `_throttle()` 全局节流（`MIN_INTERVAL=0.5s`，`threading.Lock` 串行化节流点）+ HTTP 429 指数退避重试（3 次）。预留队列化接口（`queue.Queue + worker`，当前同步执行）。**新增任何对希沃的 `requests.post` 都必须改用 `request_manager.post`**。
 - **[api.py](api.py)**：m-campus API 调用网关。`api().action(type, params, account)` 把 pxencode 后的参数 POST 到 `/class/apis.json?action=<type>`，返回响应 JSON。内部已用 `request_manager.post`。
-- **[msg.py](msg.py)**：纯 DAO。只做单次请求，**不再有**多页聚合逻辑。`get(count, start=1) -> MessageResponse` 是核心方法，`start` 是 1-based 页码（start=1=最新一页，递增往更旧翻页，页内按 id 升序，页间无重叠）；调用方通过 `.result` 取 `list[RawMessage]`。
+- **[msg.py](msg.py)**：纯 DAO。只做单次请求，**不再有**多页聚合逻辑。`get(count, start=1) -> MessageResponse` 是核心方法，`start` 是 1-based 页码（start=1=最新一页，递增往更旧翻页，页内按 id 升序，页间无重叠）；调用方通过 `.result` 取 `tuple[RawMessage, ...]`。
 - **[message_service.py](message_service.py)**：消息数据源层。`MessageDataSource` 独占 `chat_history.json` 读写、消息格式化、内存缓存（基于文件 mtime 感知 `main.py` 等外部写入）。`_format_msg(raw: RawMessage) -> Message`；`_messages: list[Message]`；对外方法返回 dict（边界 `dataclasses.asdict` 转 dict 给 jsonify）。`sync_all` 翻页循环在本层。
 - **[models.py](models.py)**：数据模型层。进程内数据传输用 dataclass，跨进程边界（Flask jsonify / 写 chat_history.json / pxencode 网络请求）调 `dataclasses.asdict()` 转换。含 `Config` 配置模型（可变，供 `reload_config` 原地更新实现热重载）。详见 [数据模型层（models.py）](#数据模型层modelspy)。
 - **[api_server.py](api_server.py)**：入口层，handler 薄层化。全局 `session = Session()` + 全局 `datasource = MessageDataSource(session)`（构造时仅 `_refresh` 读 mtime，不碰 session）。
@@ -185,7 +185,7 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 | --- | --- | --- |
 | `RawMessage` | ✅ frozen+slots | 希沃原始消息（`msg.get().result` 列表元素），只读，字段缺失用默认值兜底（`senderType` 默认 `"unknown"`、`type` 默认 `1` 等，对齐原 `dict.get(key, default)` 行为） |
 | `Message` | ❌ 只 slots，**可变** | 格式化后消息（`chat_history.json` 存储 / `message_service._messages` 缓存）。可变是为方便 `load_local` 补 `senderName`（直接 `m.senderName = name`，不必 `replace`）。`type` 标注 `int \| str`：保留 main.py 写`str(msg_type)` / message_service 写 int 的既有混合行为 |
-| `MessageResponse` | ✅ frozen+slots | `msg.get` 的响应包装（含 `result: list[RawMessage]`）。容器只读，但 `result` 是 list 自身可变 |
+| `MessageResponse` | ✅ frozen+slots | `msg.get` 的响应包装（含 `result: tuple[RawMessage, ...]`）。容器与 `result` 均真正不可变，需要增删/排序时消费方自行复制 |
 | `SendResult` | ✅ frozen+slots | 发送类操作结果（`msg.send` / `yunban.send_msg`）：`ok` / `seewo_code`（希沃业务码）/ `http_status`（HTTP 码）/ `message`，两套码分开存放。`__bool__` 委托 `ok`，故既有 `if result:` 写法仍正确；`needs_relogin` / `is_business_reject` 谓词封装语义 |
 | `Config` | ❌ 只 slots，**可变** | `config.json` 数据模型。可变是为了让 `init.reload_config()` 原地更新实现热重载。typed 字段覆盖已知配置项，未建模的原始键收集到 `extra` 保留，`banPaiConfig` 映射为 `ban_pai_config` dict 字段 |
 | `YunbanClass` | ✅ frozen+slots | 云班班级（`getclasslist` 返回元素，含 uid/name/roomUid/schoolUid 等） |
@@ -193,7 +193,7 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 | `YunbanEvent` | ✅ frozen+slots | 云班考勤事件（`getevents` 返回元素，含 name/eventId/起止时间/周期/绑班/config 班牌时段等） |
 | `YunbanParent` | ✅ frozen+slots | 云班家长（`getparents` 返回元素，含 parentName/手机号/bindWx/未读数/关系位） |
 | `YunbanNote` | ✅ frozen+slots | 云班留言（`getnotes` 的 `result` 元素，含 sender/receiver/type/status/resUrl/时间等） |
-| `YunbanNotesPage` | ✅ frozen+slots | 云班留言分页（`getnotes` 返回结构，`result: list[YunbanNote]`） |
+| `YunbanNotesPage` | ✅ frozen+slots | 云班留言分页（`getnotes` 返回结构，`result: tuple[YunbanNote, ...]`） |
 
 > 云班模型（`Yunban*`）均沿用 `from_dict` + `.get` 兜底约定（frozen+slots），未建模的原始键收集到 `extra` 保留。
 

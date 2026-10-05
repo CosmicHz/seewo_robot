@@ -140,7 +140,7 @@ class FakeStuMsg:
             return MessageResponse(
                 statusCode=200, result=list(self.get_impl(count, start))
             )
-        return MessageResponse(statusCode=200, result=list(self.pages.get(start, [])))
+        return MessageResponse(statusCode=200, result=tuple(self.pages.get(start, [])))
 
     def send(self, content, type, resUrl="", voiceLength=0, resConfig=""):
         self.sent.append(

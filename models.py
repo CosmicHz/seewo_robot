@@ -3,7 +3,7 @@
 
 - RawMessage：希沃原始消息（msg.get 返回的 result 元素），frozen + slots，只读
 - Message：格式化后消息（chat_history.json 存储），slots + 可变（load_local 补 senderName）
-- MessageResponse：msg.get 的响应包装，frozen + slots，容器只读但 result list 可变
+- MessageResponse：msg.get 的响应包装，frozen + slots，result 为 tuple，真正不可变
 """
 
 from dataclasses import dataclass, field
@@ -190,20 +190,20 @@ class SeewoQrCode(IntEnum):
 class MessageResponse:
     """msg.get 经 pxdecode 后的响应包装（含 result 消息列表）。
 
-    frozen + slots：容器本身只读；result 是 list，list 自身可变，
-    需要 append/extend 时直接操作 list，不必改容器。
+    frozen + slots，result 为 tuple：容器与内容都是真正不可变，
+    消费方需要增删/排序时自行复制（sorted() 等），不改容器。
     """
 
     statusCode: int = 0
     message: str = ""
-    result: list[RawMessage] = field(default_factory=list)
+    result: tuple[RawMessage, ...] = ()
 
     @classmethod
     def from_dict(cls, d: dict) -> "MessageResponse":
         return cls(
             statusCode=d.get("statusCode", 0),
             message=d.get("message", ""),
-            result=[RawMessage.from_dict(m) for m in d.get("result", [])],
+            result=tuple(RawMessage.from_dict(m) for m in d.get("result", [])),
         )
 
 
@@ -587,7 +587,7 @@ class YunbanNotesPage:
     page: int = 0
     pageSize: int = 0
     totalCount: int = 0
-    result: list[YunbanNote] = field(default_factory=list)
+    result: tuple[YunbanNote, ...] = ()
 
     @classmethod
     def from_dict(cls, d: dict) -> "YunbanNotesPage":
@@ -595,5 +595,5 @@ class YunbanNotesPage:
             page=d.get("page", 0),
             pageSize=d.get("pageSize", 0),
             totalCount=d.get("totalCount", 0),
-            result=[YunbanNote.from_dict(m) for m in d.get("result", [])],
+            result=tuple(YunbanNote.from_dict(m) for m in d.get("result", [])),
         )

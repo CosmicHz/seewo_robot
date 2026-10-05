@@ -92,7 +92,7 @@ class TestGet:
         )
         resp = dao.get(10, start=0)
         assert resp.statusCode == 50000
-        assert resp.result == []
+        assert resp.result == ()
 
     def test_unwrapped_error_response_returns_business_error(self, http, dao):
         """网关未包装业务错误时，返回明确的 MessageResponse 而不是泄漏 KeyError"""
@@ -104,7 +104,7 @@ class TestGet:
         response = dao.get(10)
         assert response.statusCode == -500
         assert response.message == "token 无效"
-        assert response.result == []
+        assert response.result == ()
 
 
 class TestHelpers:
