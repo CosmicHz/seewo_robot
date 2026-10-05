@@ -54,13 +54,12 @@ class msg:
             "parentUid": self.acc.uid,
             "childUid": self.stu.userUid,
         }
-        decoded = json.loads(
-            pxdecode(
-                api().action(
-                    "GET_KIDNOTE_V1_BYPARENTUID_BYCHILDUID_NOTES", data, self.acc
-                )
-            )
+        response = api().action(
+            "GET_KIDNOTE_V1_BYPARENTUID_BYCHILDUID_NOTES", data, self.acc
         )
+        if "data" not in response:
+            return MessageResponse.from_dict(response)
+        decoded = json.loads(pxdecode(response))
         return MessageResponse.from_dict(decoded)
 
     def get_content(self, count: int):
@@ -70,7 +69,8 @@ class msg:
         """
         warnings.warn("该方法极不完善，请勿使用", DeprecationWarning, stacklevel=2)
         result = self.get(count).result
-        return result[0].content if result else ""
+        latest = max(result, key=lambda message: message.id, default=None)
+        return latest.content if latest else ""
 
     def send(self, content: str, type: int, resUrl="", voiceLength=0, resConfig=""):
         """发送留言，返回 SendResult（含 statusCode，便于上层区分 Token 失效与业务拒绝）"""
@@ -117,7 +117,7 @@ class msg:
         result = self.get(count).result
         if not result:
             return 0
-        return result[0].id
+        return max(result, key=lambda message: message.id).id
 
     def get_all_ids(self, count: int) -> list[int]:
         """获取多条消息的ID列表，按时间正序排列（旧→新）

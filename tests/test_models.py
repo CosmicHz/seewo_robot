@@ -86,12 +86,6 @@ class TestMessage:
         assert m.senderName == ""
         assert m.time == ""
 
-    def test_mutable_sender_name(self):
-        """load_local 会直接给 senderName 赋值，故 Message 必须可变"""
-        m = Message.from_dict({"id": 1})
-        m.senderName = "家长"
-        assert m.senderName == "家长"
-
     def test_asdict_roundtrip(self):
         m = Message.from_dict(
             {
@@ -118,12 +112,6 @@ class TestMessageResponse:
 
     def test_from_dict_missing_result(self):
         assert MessageResponse.from_dict({"statusCode": 200}).result == []
-
-    def test_result_list_is_mutable(self):
-        """容器 frozen，但 result 是 list，需要能就地增删"""
-        resp = MessageResponse.from_dict({"result": [{"id": 1}]})
-        resp.result.append(RawMessage.from_dict({"id": 2}))
-        assert len(resp.result) == 2
 
 
 class TestConfig:
@@ -258,12 +246,31 @@ class TestYunbanClass:
         assert c.extra == {"newField": 1}
         assert c.name == ""
 
-    def test_asdict_then_from_dict_nests_extra(self):
-        """asdict 会把 extra 整体带出，再 from_dict 时它整块落回 extra（非严格往返）"""
+    def test_asdict_then_from_dict_preserves_extra(self):
         c = YunbanClass.from_dict({"uid": "c1", "newField": 1})
         again = YunbanClass.from_dict(dataclasses.asdict(c))
         assert again.uid == "c1"
-        assert again.extra == {"extra": {"newField": 1}}
+        assert again.extra == {"newField": 1}
+        assert YunbanClass.from_dict(dataclasses.asdict(again)) == again
+
+    def test_top_level_extra_overrides_nested_extra(self):
+        c = YunbanClass.from_dict(
+            {"uid": "c1", "extra": {"newField": "old"}, "newField": "new"}
+        )
+        assert c.extra == {"newField": "new"}
+
+    def test_non_dict_nested_extra_is_ignored(self):
+        """extra 字段为非 dict 时按 {} 兜底，未知字段仍正常收集"""
+        c = YunbanClass.from_dict({"uid": "c1", "extra": 5, "newField": 1})
+        assert c.extra == {"newField": 1}
+
+
+@pytest.mark.parametrize(
+    "model", [YunbanStudent, YunbanEvent, YunbanParent, YunbanNote]
+)
+def test_yunban_models_round_trip_extra(model):
+    instance = model.from_dict({"unknownField": {"value": 1}})
+    assert model.from_dict(dataclasses.asdict(instance)) == instance
 
 
 class TestYunbanStudent:

@@ -21,7 +21,7 @@ markdown-it-py==4.2.0
     #   mdit-py-plugins
     #   rich
     #   textual
-markupsafe==3.0.3
+markupsafe==3.0.4
     # via
     #   flask
     #   jinja2
@@ -32,7 +32,7 @@ mdurl==0.1.2
     # via markdown-it-py
 pillow==12.3.0
     # via seewo-robot (pyproject.toml)
-platformdirs==4.12.2
+platformdirs==4.12.3
     # via textual
 pygments==2.21.0
     # via

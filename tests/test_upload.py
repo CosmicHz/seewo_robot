@@ -101,8 +101,7 @@ class TestGetResource:
 
 
 def test_mock_server_policy_matches_client_expectations():
-    """mock 的策略结构须与生产一致（已由 tmp/probe_upload_policy.py 实测确认）：
-
+    """mock 的策略结构须与生产一致：
     expireSeconds 在 data 层；policyList[0] 含 uploadUrl 与 >=11 个 formFields。
     """
     from mock_server import ACTION_HANDLERS
@@ -131,8 +130,7 @@ class TestUpload:
         assert list(ledger) == ["照片.png"]
         assert ledger["照片.png"]["fileId"] == "f1"
 
-    def test_ledger_key_is_basename_only(self, cos, tmp_path, uploads_ledger):
-        """已知问题：台账按 basename 做 key，同名不同路径会互相覆盖"""
+    def test_ledger_preserves_colliding_basenames(self, cos, tmp_path, uploads_ledger):
         sub = tmp_path / "sub"
         sub.mkdir()
         cos.add(
@@ -160,8 +158,21 @@ class TestUpload:
         )
 
         ledger = json.loads(uploads_ledger.read_text(encoding="utf-8"))
-        assert list(ledger) == ["same.png"]
-        assert ledger["same.png"]["downloadUrl"] == "http://cdn/2.png"
+        assert list(ledger) == ["same.png", "same.png#2"]
+        assert ledger["same.png"]["downloadUrl"] == "http://cdn/1.png"
+        assert ledger["same.png#2"]["downloadUrl"] == "http://cdn/2.png"
+        assert ledger["same.png#2"]["filename"] == "same.png"
+
+    def test_source_file_not_locked_after_failed_upload(self, cos, tmp_path):
+        """上传失败后源文件句柄必须已关闭"""
+        import os
+
+        cos.add(cos.POST, UPLOAD_URL, json={"code": 1, "message": "denied"})
+        path = _make_file(tmp_path, "locked.png")
+        up = upload_module.Upload(FakeAccount())
+        up.upload(str(path), "image/png")
+        assert up.isupload is False
+        os.remove(path)  # 句柄未关闭时这里会抛 PermissionError
 
     def test_second_upload_on_same_instance_is_skipped(self, cos, tmp_path):
         cos.add(

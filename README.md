@@ -369,7 +369,7 @@ Invoke-WebRequest -Uri "http://localhost:9000/mock/add_message" `
 | `/api/sync_all` | POST | 全量同步所有历史消息到本地缓存（body 可带 `batch_size` 和 `delay` 防风控） |
 | `/api/send` | POST | 发送文本消息（详见下方「长消息处理」） |
 | `/api/send_image` | POST | 发送图片（支持 JSON body 传 `file_path`，或 multipart/form-data 上传文件） |
-| `/api/send_audio` | POST | 发送音频（JSON body 传 `file_path` + `voice_length`） |
+| `/api/send_audio` | POST | 发送音频（JSON body 传 `file_path` + `voice_length`；上传成功后只产生一条音频留言） |
 | `/api/refresh` | POST | 刷新会话（重新读取 tokens.json 或重新登录） |
 | `/api/config/reload` | POST | 热重载 `config.json`（无需重启；重新应用日志级别，API Key/长消息策略/拆分正则/mock 路由即时生效） |
 

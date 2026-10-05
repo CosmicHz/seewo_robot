@@ -105,7 +105,7 @@ class TestPost:
         resp = request_manager.post(URL, headers={}, data="{}")
         assert resp.status_code == 429
         assert len(http.calls) == 3
-        assert rm.backoffs == [1, 2, 4]
+        assert rm.backoffs == [1, 2]
 
     def test_throttles_each_attempt(self, monkeypatch, http):
         """每次尝试前都过 _throttle（含重试）"""
@@ -118,7 +118,7 @@ class TestPost:
         request_manager.post(URL, headers={}, data="{}")
 
         assert clock.sleeps.count(0.5) == 2  # 第 1 次不等待，后续 2 次各等一个间隔
-        assert clock.backoffs == [1, 2, 4]
+        assert clock.backoffs == [1, 2]
 
     def test_sends_request_as_post_with_payload(self, rm, http):
         self._add(http, 200)

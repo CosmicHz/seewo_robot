@@ -24,6 +24,8 @@ MIN_INTERVAL = 0.5
 # 单次请求超时(秒)：避免对端挂死导致调用方无限阻塞。
 # 注意：超时不重试。发送类请求非幂等，超时可能已被服务端处理，重试会造成重复留言。
 TIMEOUT = 10
+# HTTP 429 退避重试次数上限（首次请求 + 最多 MAX_RETRIES-1 次重试）
+MAX_RETRIES = 3
 # 队列化预留：后续可引入 queue.Queue + worker 线程串行消费所有请求
 # 当前同步执行 + 节流；多线程调用时靠 _lock 串行化节流点
 # _request_queue = queue.Queue()
@@ -44,15 +46,18 @@ def _throttle():
 def post(url, headers, data):
     """统一 POST 入口：节流 + HTTP 风控检测框架。
 
-    当前：节流后同步 POST，检测 HTTP 429 退避重试（最多 3 次，指数退避）。
+    当前：节流后同步 POST，检测 HTTP 429 退避重试（最多 `MAX_RETRIES` 次，指数退避）。
     预留：后续可改为丢队列由 worker 串行消费，调用方接口不变。
     """
-    for attempt in range(3):
+    for attempt in range(MAX_RETRIES):
         _throttle()
         resp = requests.post(
             url, headers=headers, data=data, verify=verify, timeout=TIMEOUT
         )
         if resp.status_code != 429:
+            return resp
+        if attempt == MAX_RETRIES - 1:
+            logger.warning("HTTP 429 风控，重试次数已用尽(attempt=%d)", attempt)
             return resp
         backoff = 2**attempt
         logger.warning("HTTP 429 风控，退避 %ds 重试(attempt=%d)", backoff, attempt)

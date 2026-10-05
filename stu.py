@@ -30,7 +30,11 @@ class stu:
             count: 选择第几个关联学生（默认第一个）
         """
         self.acc = acc
-        info = self.info()[count]
+        students = self.info()
+        # 负数会走 Python 的倒数语义静默选错学生，必须显式拦截
+        if count < 0 or count >= len(students):
+            raise IndexError(f"student count out of range: {count}")
+        info = students[count]
         self.schoolUid = info["schoolUid"]
         self.classUid = info["classUid"]
         self.userUid = info["userUid"]
@@ -80,4 +84,5 @@ class stu:
         )
 
     def add_stu(self, stu_uid):
-        pass
+        """添加学生暂未实现；不伪装成成功或静默忽略请求。"""
+        raise NotImplementedError("adding students is not implemented")

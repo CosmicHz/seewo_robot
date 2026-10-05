@@ -150,12 +150,23 @@ class yunban:
         `topEndTime`，形如 ("06:40", "07:20")，代表班牌上允许显示考勤的时间窗，
         与实际考勤起止（startTime/endTime）不一定相同。
         """
-        config = json.loads(
-            event.config
-        )  # '{"banPaiConfig": {"topEndTime": "07:20", "topStartTime": "06:16"}}'
-        return config["banPaiConfig"]["topStartTime"], config["banPaiConfig"][
-            "topEndTime"
-        ]
+        try:
+            config = json.loads(event.config)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                "event.config must be valid JSON containing banPaiConfig"
+            ) from exc
+        ban_pai_config = (
+            config.get("banPaiConfig") if isinstance(config, dict) else None
+        )
+        if not isinstance(ban_pai_config, dict):
+            raise ValueError("event.config is missing banPaiConfig")
+        try:
+            return ban_pai_config["topStartTime"], ban_pai_config["topEndTime"]
+        except KeyError as exc:
+            raise ValueError(
+                "event.config is missing banPaiConfig.topStartTime/topEndTime"
+            ) from exc
 
     """
     Random generate attend data

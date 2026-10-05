@@ -136,7 +136,7 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 | `/api/messages` | GET | `datasource.fetch_latest(count)` | 实时向希沃取最新一页，**不持久化** |
 | `/api/send` | POST | `_send()` → `session.stu_msg.send` | 文本发送，支持长消息 `strategy`；响应带 `seewoCode`（希沃业务码）；`-500/-505` 自动刷新会话后重发一次，仍失效则 401 `need_login` |
 | `/api/send_image` | POST | `upload_file_to_cloud` + `_send()` | 图片发送；发送失败返回 500（不再一律回 ok） |
-| `/api/send_audio` | POST | `upload_file_to_cloud` + `_send()` | 音频发送（先发文件名，再发音频） |
+| `/api/send_audio` | POST | `upload_file_to_cloud` + `_send()` | 音频发送（上传成功后只发送一条音频留言） |
 | `/api/history` | GET | `datasource.load_local(offset, limit)` | 读本地缓存，分页 |
 | `/api/load_earlier` | GET | `datasource.load_earlier_from_local(before_id, count)` | 纯本地读更早消息（不请求希沃，靠 `sync_all` 提前同步） |
 | `/api/sync_all` | POST | `datasource.sync_all(batch_size, delay)` | 全量同步历史到本地（防风控） |
@@ -171,7 +171,7 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 - 调用方（`main.py` / `api_server.py` / `tui_client.py`）**需要时自行从 messages 推断**：
 
   ```python
-  last_id = max(m.id for m in messages) if messages else 0      # 最新
+  last_id = max(m.id for m in messages) if messages else 0  # 最新
   earliest_id = min(m.id for m in messages) if messages else 0  # 最旧
   ```
 
@@ -352,7 +352,7 @@ encode_data = {"action": type, "params": pxencode(params)}
 @app.route("/api/xxx", methods=["POST"])
 @require_api_key
 def xxx():
-    err = _check_session()      # 1. 会话检查（必须）
+    err = _check_session()  # 1. 会话检查（必须）
     if err:
         return err
     try:
@@ -450,16 +450,15 @@ def xxx():
 - `_refresh` 通过 mtime 感知外部写入（main.py 的 append_message）。**写操作后必须调 `_invalidate` 失效缓存**，否则下次 `_refresh` 不会重读。
 - `_persist` 已封装：格式化 + merge + invalidate + refresh。
 - 不要在 datasource 里直接调 `session.stu_msg.send`。这是数据源层，不是发送层。
+- `sync_all(delay)` 的 `delay` 是同步流程自身额外增加的等待（防风控）；请求层自身的节流（`request_manager.MIN_INTERVAL`）独立叠加，不再与该常量比较。
 
 ## 已知问题
 
 - [auto_attend.py](auto_attend.py) 粗糙非生产级：硬编码 `classlist[35]`；事件选择靠 `sys.argv[1]` + `events[1]` 回退，`events` 为空时与 owner 原版一样照常 `IndexError` 崩溃。依赖模块 `yunban_token` 能连生产取数。
 - [yunban.py](yunban.py) 的所有请求**直接 `requests.request`，绕过 `request_manager`**：无统一节流 / 429 退避。批量取出全部班级、逐班取学生、批量签到等高频场景需调用方自行 `time.sleep` 防风控（503/504）。
-- [message_service.py:195](message_service.py#L195) 的 `if delay > request_manager.MIN_INTERVAL` 是耦合传输层细节的实现，理想做法是直接 `time.sleep(delay)` 让 request_manager 节流叠加，或完全移除让 request_manager 单独节流
 - **聊天记录损坏 = 启动即失败（已修，故意不吞异常）**：`funcs.load_chat_history()` 遇到「文件存在但无法解析」会抛 `CorruptChatHistoryError`，让服务启动时立刻崩掉。原因：读容错（返回 `[]`）+ [append_message](funcs.py) 的「读 → 追加 → 全量覆盖」会把损坏当空记录，一次追加就把全部历史覆盖成 1 条新消息（已实测复现）。恢复方式：修复或删除损坏文件后重启，再用 `sync_all` 重新拉取全量。
 - **upload policy 字段位置已按生产实测对齐（已结）**：生产实测（一次只读策略请求，不上传文件）确认 `expireSeconds` 在响应的 `data` 层，`policyList[0]` 含 `uploadUrl/headerFields/priority/type/formFields`。[mock_server.py](mock_server.py) 已按此修正，`tests/test_upload.py::test_mock_server_policy_matches_client_expectations` 已解除 skip
 - **上游错误处理尚未体系化**：已完成「请求超时（`request_manager.TIMEOUT`）」「状态码语义统一到 `models.SeewoCode` / `SeewoQrCode` + `SendResult` 分存 `seewo_code`/`http_status`」「`-500/-505` 刷新会话后重发一次」「媒体端点不再吞掉发送失败」「`Upload` 策略失败降级」「上传实现合并为 `upload.upload_file` 单一入口」。仍待计划：`login.py` 的 4 处裸 `requests.get` 无超时；`msg.send` / handler 用 `print`/无日志，失败不可观测；错误类型未建模为异常体系（DAO 层返回结果对象而非抛异常）
-- **uploads.json 按纯文件名做 key，同名覆盖**：写入逻辑在 [upload.py#L140](upload.py#L140)，key 只取 `os.path.basename(file)`，不区分完整路径、不区分家长账号。同一个 basename 的文件重复上传（哪怕路径不同、账号不同、内容不同），后写的都会直接覆盖前一条。影响范围有限：主业务链路（上传 → 发送留言）走内存中的 `downloadUrl`，不读这份台账，因此不会导致发错、漏发；只会影响"事后手动打开 uploads.json 按文件名翻历史上传 URL"的查询场景。暂时不打算改文件格式（避免破坏已按旧 dict 格式写了解析逻辑的其他开发者脚本），如要修复需提前发布变更公告。
 
 ## 数据文件清单
 
@@ -469,7 +468,7 @@ def xxx():
 | `tokens.json` | 登录 Token 存储 | 两条路径（共享，注意写冲突） |
 | `chat_history.json` | 真实聊天记录持久化 | 两条路径 |
 | `chat_history_mock.json` | Mock 模式下的聊天记录 | Mock（`use_mock=true` 时自动切换） |
-| `uploads.json` | 上传文件记录（dict，key 仅取文件 basename，同名上传会覆盖，详见已知问题） | 路径 A（`upload_file.py`）/ 路径 B（`/api/send_image` 等） |
+| `uploads.json` | 上传文件记录（dict，basename 冲突时使用 `#2`、`#3` 后缀） | 路径 A（`upload_file.py`）/ 路径 B（`/api/send_image` 等） |
 | `mock_data.json` | Mock 服务器持久化数据 | Mock |
 | `logs/*.log` | 按日期记录日志 | 两条路径 |
 | `qrcode.png` | 登录二维码图片 | 两条路径（登录时生成） |

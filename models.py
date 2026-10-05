@@ -10,6 +10,20 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 
 
+def _collect_extra(data: dict, known: set[str]) -> dict:
+    """保留未知字段，并让 dataclass round-trip 不把 extra 再嵌套一层。"""
+    nested = data.get("extra", {})
+    extra = dict(nested) if isinstance(nested, dict) else {}
+    extra.update(
+        {
+            key: value
+            for key, value in data.items()
+            if key not in known and key != "extra"
+        }
+    )
+    return extra
+
+
 class SeewoCode(IntEnum):
     """希沃业务状态码（响应体里的 `statusCode` 字段）——状态码语义的唯一约定。
 
@@ -277,7 +291,7 @@ class YunbanClass:
             schoolUid=d.get("schoolUid", ""),
             schoolName=d.get("schoolName", ""),
             schoolType=d.get("schoolType", ""),
-            extra={k: v for k, v in d.items() if k not in cls._known},
+            extra=_collect_extra(d, cls._known),
         )
 
     _known = {
@@ -321,7 +335,7 @@ class YunbanStudent:
             headImageUrl=d.get("headImageUrl", ""),
             extendCardIds=list(d.get("extendCardIds", []) or []),
             ucPassword=d.get("ucPassword", ""),
-            extra={k: v for k, v in d.items() if k not in cls._known},
+            extra=_collect_extra(d, cls._known),
         )
 
     _known = {
@@ -392,7 +406,7 @@ class YunbanEvent:
             isRoomBaseOnClass=d.get("isRoomBaseOnClass", False),
             attendanceStudents=list(d.get("attendanceStudents", []) or []),
             attendanceTeachers=list(d.get("attendanceTeachers", []) or []),
-            extra={k: v for k, v in d.items() if k not in cls._known},
+            extra=_collect_extra(d, cls._known),
         )
 
     _known = {
@@ -449,7 +463,7 @@ class YunbanParent:
             notReadNoteCount=d.get("notReadNoteCount", 0),
             tipsMessage=d.get("tipsMessage", ""),
             parentHeadImage=d.get("parentHeadImage", ""),
-            extra={k: v for k, v in d.items() if k not in cls._known},
+            extra=_collect_extra(d, cls._known),
         )
 
     _known = {
@@ -532,7 +546,7 @@ class YunbanNote:
             receiverTips=d.get("receiverTips", ""),
             callStatus=d.get("callStatus", 0),
             callTime=d.get("callTime", 0),
-            extra={k: v for k, v in d.items() if k not in cls._known},
+            extra=_collect_extra(d, cls._known),
         )
 
     _known = {

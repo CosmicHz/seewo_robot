@@ -11,6 +11,7 @@ import time
 import base64
 import logging
 import threading
+import tempfile
 from flask import Flask, request, jsonify
 from functools import wraps
 from typing import Tuple
@@ -457,6 +458,7 @@ def send_image():
     err = _check_session()
     if err:
         return err
+    temp_path = None
     try:
         # 方式1: JSON body 传文件路径
         if request.is_json:
@@ -469,7 +471,16 @@ def send_image():
             if "file" not in request.files:
                 return jsonify({"status": "error", "message": "no file uploaded"}), 400
             file = request.files["file"]
-            file_path = f"temp_{file.filename}"
+            # 扩展名仅取自原始文件名，且必须是合法的 ".ext" 形式，否则丢弃：
+            # basename 方法剥掉路径分隔符，正则白名单再挡掉 ".." 等目录穿越变体，
+            # 防止后缀拼到 mkstemp 路径后把写入位置引出临时目录。
+            suffix = os.path.splitext(os.path.basename(file.filename or ""))[1]
+            if not re.fullmatch(r"\.[A-Za-z0-9]{1,10}", suffix):
+                suffix = ""
+            # 保存到临时文件
+            fd, temp_path = tempfile.mkstemp(prefix="seewo-upload-", suffix=suffix)
+            os.close(fd)
+            file_path = temp_path
             file.save(file_path)
 
         # 上传并发送
@@ -494,6 +505,12 @@ def send_image():
         return jsonify({"status": "ok", "url": url})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except FileNotFoundError:
+                pass
 
 
 @app.route("/api/send_audio", methods=["POST"])
@@ -516,23 +533,7 @@ def send_audio():
         if not file_path or not os.path.exists(file_path):
             return jsonify({"status": "error", "message": "file_path invalid"}), 400
 
-        # 发送文件名
-        named, need_login = _send(os.path.basename(file_path), 1)
-        if need_login:
-            return _need_login_response()
-        if not named.ok:
-            return (
-                jsonify(
-                    {
-                        "status": "error",
-                        "message": named.message or "发送失败",
-                        "seewoCode": named.seewo_code,
-                    }
-                ),
-                500,
-            )
-
-        # 上传并发送音频
+        # 先上传，成功后只发送一条真正的音频留言，避免半提交。
         url = upload_file_to_cloud(file_path, "audio/mp3")
         if not url:
             return jsonify({"status": "error", "message": "upload failed"}), 500
@@ -597,16 +598,16 @@ def get_history():
 @app.route("/api/load_earlier", methods=["GET"])
 @require_api_key
 def load_earlier_messages():
-    """加载更早的消息（滚动加载历史，纯本地读）
+    """加载更早的消息（滚动加载历史消息）
+
+    不检查与希沃的会话是否有效：本端点只读本地 chat_history 缓存、不请求希沃，
+    Token 过期时也应可用
 
     Query params:
         count: 获取数量，默认50
         before_id: 客户端当前最早消息 id（游标），返回早于它的最新 count 条；
                    未传时默认 max(local)+1（返回本地最新的 count 条）
     """
-    err = _check_session()
-    if err:
-        return err
     try:
         count = int(request.args.get("count", 50))
         # before_id 优先取客户端传入的游标；未传则用 max(local)+1 兜底

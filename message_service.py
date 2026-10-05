@@ -15,7 +15,6 @@ import funcs
 from funcs import load_chat_history, merge_messages
 from models import RawMessage, Message
 from sortedcontainers import SortedKeyList
-import request_manager
 
 _MessageSortedList = partial(SortedKeyList, key=attrgetter("id"))
 
@@ -191,9 +190,9 @@ class MessageDataSource:
                 if all(m.id < earliest_id for m in page) and len(page) < batch_size:
                     break
                 start += 1
-                # delay > request_manager.MIN_INTERVAL 时额外等待（全量同步谨慎防风控）
-                if delay > request_manager.MIN_INTERVAL:
-                    time.sleep(delay - request_manager.MIN_INTERVAL)
+                # delay 是同步流程自身额外增加的等待；请求层节流独立叠加。
+                if delay > 0:
+                    time.sleep(delay)
 
         all_msgs = [m for m in earlier + latest if m.id not in existing_ids]
         formatted = self._persist(all_msgs)
