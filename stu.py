@@ -30,12 +30,9 @@ class stu:
             count: 选择第几个关联学生（默认第一个）
         """
         self.acc = acc
-        if not isinstance(count, int) or isinstance(count, bool):
-            raise TypeError("student count must be an integer")
-        if count < 0:
-            raise IndexError(f"student count out of range: {count}")
         students = self.info()
-        if count >= len(students):
+        # 负数会走 Python 的倒数语义静默选错学生，必须显式拦截
+        if count < 0 or count >= len(students):
             raise IndexError(f"student count out of range: {count}")
         info = students[count]
         self.schoolUid = info["schoolUid"]
