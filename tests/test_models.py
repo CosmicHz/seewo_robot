@@ -259,6 +259,11 @@ class TestYunbanClass:
         )
         assert c.extra == {"newField": "new"}
 
+    def test_non_dict_nested_extra_is_ignored(self):
+        """extra 字段为非 dict 时按 {} 兜底，未知字段仍正常收集"""
+        c = YunbanClass.from_dict({"uid": "c1", "extra": 5, "newField": 1})
+        assert c.extra == {"newField": 1}
+
 
 @pytest.mark.parametrize(
     "model", [YunbanStudent, YunbanEvent, YunbanParent, YunbanNote]

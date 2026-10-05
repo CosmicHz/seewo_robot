@@ -176,6 +176,20 @@ class TestEventTime:
         with pytest.raises(ValueError, match="event.config"):
             client.geteventtime(YunbanEvent.from_dict({"config": ""}))
 
+    def test_config_without_ban_pai_config_raises(self, client):
+        with pytest.raises(ValueError, match="banPaiConfig"):
+            client.geteventtime(YunbanEvent.from_dict({"config": "{}"}))
+
+    def test_non_dict_ban_pai_config_raises(self, client):
+        with pytest.raises(ValueError, match="banPaiConfig"):
+            client.geteventtime(YunbanEvent.from_dict({"config": "[]"}))
+
+    def test_ban_pai_config_missing_window_raises(self, client):
+        with pytest.raises(ValueError, match="topStartTime/topEndTime"):
+            client.geteventtime(
+                YunbanEvent.from_dict({"config": '{"banPaiConfig": {}}'})
+            )
+
     def test_random_time_within_window(self, client, monkeypatch):
         monkeypatch.setattr(yunban_module.random, "uniform", lambda a, b: b)
         assert client.random_time_in_range("06:40", "07:20") == "07:20:00"

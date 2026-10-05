@@ -139,6 +139,50 @@ class TestSendImage:
         )
         assert resp.status_code == 400
 
+    @pytest.mark.parametrize("filename", ["photo.", "picture.中文扩展"])
+    def test_multipart_invalid_suffix_still_uploads(
+        self, app_env, auth_headers, tmp_path, monkeypatch, stubbed_upload, filename
+    ):
+        """非法扩展名被丢弃（此时临时文件无后缀），上传流程不受影响"""
+        import io
+
+        monkeypatch.chdir(tmp_path)
+        client, fake = app_env
+        resp = client.post(
+            "/api/send_image",
+            headers=auth_headers,
+            data={"file": (io.BytesIO(b"png-bytes"), filename)},
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 200
+        assert not stubbed_upload[0]["path"].endswith(filename)
+        assert fake.stu_msg.sent[0]["type"] == 2
+
+    @pytest.mark.parametrize(
+        "filename", ["../../evil.png", "..\\..\\evil.png", "a.png/..\\x.sh"]
+    )
+    def test_multipart_traversal_filename_stays_in_temp_dir(
+        self, app_env, auth_headers, tmp_path, monkeypatch, stubbed_upload, filename
+    ):
+        """目录穿越文件名不得把写入位置引出系统临时目录"""
+        import io
+        import tempfile
+
+        monkeypatch.chdir(tmp_path)
+        client, _ = app_env
+        resp = client.post(
+            "/api/send_image",
+            headers=auth_headers,
+            data={"file": (io.BytesIO(b"png-bytes"), filename)},
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 200
+        saved = Path(stubbed_upload[0]["path"])
+        assert saved.parent.resolve() == Path(tempfile.gettempdir()).resolve()
+        # 请求结束后临时文件已清理，穿越目标也不存在
+        assert not saved.exists()
+        assert not (tmp_path / "evil.png").exists()
+
 
 class TestSendAudio:
     def test_missing_body_rejected(self, app_env, auth_headers):

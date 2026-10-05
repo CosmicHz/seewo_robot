@@ -55,6 +55,12 @@ class TestInit:
         with pytest.raises(IndexError, match="student count out of range: 5"):
             stu_module.stu(FakeAccount(), count=5)
 
+    def test_negative_count_raises_not_last_student(self, http):
+        """负数不能走 Python 倒数语义静默选错学生"""
+        _register_list(http, STUDENTS)
+        with pytest.raises(IndexError, match="student count out of range: -1"):
+            stu_module.stu(FakeAccount(), count=-1)
+
 
 class TestSearch:
     def test_search_by_name_sends_class_scope(self, http):
