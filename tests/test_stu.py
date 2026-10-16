@@ -36,6 +36,30 @@ class TestInit:
         assert stu_module.stu(FakeAccount(), child_uid="u2").userUid == "u2"
         assert stu_module.stu(FakeAccount(), child_uid="u1").userUid == "u1"
 
+    def test_count_selects_by_position(self, http):
+        """count 仍按位置选学生（兼容既有调用）"""
+        _register_list(http, STUDENTS)
+        assert stu_module.stu(FakeAccount(), count=1).userUid == "u2"
+        assert stu_module.stu(FakeAccount(), count=0).userUid == "u1"
+
+    def test_count_out_of_range_raises(self, http):
+        _register_list(http, STUDENTS)
+        with pytest.raises(IndexError, match="out of range"):
+            stu_module.stu(FakeAccount(), count=2)
+        with pytest.raises(IndexError, match="out of range"):
+            stu_module.stu(FakeAccount(), count=-1)
+
+    def test_child_uid_wins_over_count_with_warning(self, http):
+        """同时传入时 child_uid 优先，count 被忽略并警告"""
+        _register_list(http, STUDENTS)
+        with pytest.warns(UserWarning, match="child_uid takes precedence"):
+            s = stu_module.stu(FakeAccount(), count=1, child_uid="u1")
+        assert s.userUid == "u1"
+
+        with pytest.warns(UserWarning, match="child_uid takes precedence"):
+            s = stu_module.stu(FakeAccount(), count=0, child_uid="u1")
+        assert s.userUid == "u1"
+
     def test_unknown_child_uid_raises_with_candidates(self, http):
         _register_list(http, STUDENTS)
         with pytest.raises(KeyError, match="'u9'.*u1.*u2"):
