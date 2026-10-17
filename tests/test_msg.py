@@ -1,11 +1,8 @@
-# -*- coding: utf-8 -*-
 """第 2 层：留言 DAO（msg.py）—— 分页参数、响应解析、send 各类型分支。"""
 
 import json
 
 import pytest
-
-import msg as msg_module
 from conftest import (
     FakeAccount,
     FakeStudent,
@@ -13,6 +10,8 @@ from conftest import (
     mcampus_url,
     px_wrap,
 )
+
+import msg as msg_module
 
 GET_NOTES = "GET_KIDNOTE_V1_BYPARENTUID_BYCHILDUID_NOTES"
 POST_NOTE = "POST_KIDNOTE_V1_NOTE"

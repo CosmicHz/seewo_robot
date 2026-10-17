@@ -459,6 +459,7 @@ def xxx():
 - **聊天记录损坏 = 启动即失败（已修，故意不吞异常）**：`funcs.load_chat_history()` 遇到「文件存在但无法解析」会抛 `CorruptChatHistoryError`，让服务启动时立刻崩掉。原因：读容错（返回 `[]`）+ [append_message](funcs.py) 的「读 → 追加 → 全量覆盖」会把损坏当空记录，一次追加就把全部历史覆盖成 1 条新消息（已实测复现）。恢复方式：修复或删除损坏文件后重启，再用 `sync_all` 重新拉取全量。
 - **upload policy 字段位置已按生产实测对齐（已结）**：生产实测（一次只读策略请求，不上传文件）确认 `expireSeconds` 在响应的 `data` 层，`policyList[0]` 含 `uploadUrl/headerFields/priority/type/formFields`。[mock_server.py](mock_server.py) 已按此修正，`tests/test_upload.py::test_mock_server_policy_matches_client_expectations` 已解除 skip
 - **上游错误处理尚未体系化**：已完成「请求超时（`request_manager.TIMEOUT`）」「状态码语义统一到 `models.SeewoCode` / `SeewoQrCode` + `SendResult` 分存 `seewo_code`/`http_status`」「`-500/-505` 刷新会话后重发一次」「媒体端点不再吞掉发送失败」「`Upload` 策略失败降级」「上传实现合并为 `upload.upload_file` 单一入口」。仍待计划：`login.py` 的 4 处裸 `requests.get` 无超时；`msg.send` / handler 用 `print`/无日志，失败不可观测；错误类型未建模为异常体系（DAO 层返回结果对象而非抛异常）
+- **ruff BLE001（盲捕 Exception）暂时全局忽略**：约 38 处 `except Exception`（api_server handler / TUI 事件兜底 / main 重连循环）需按调用点逐个收窄，属「上游错误处理体系化」的一部分；完成收窄后删除 [pyproject.toml](pyproject.toml) `[tool.ruff.lint]` 中的 `ignore = ["BLE001"]`
 
 ## 数据文件清单
 

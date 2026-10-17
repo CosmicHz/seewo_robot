@@ -32,7 +32,7 @@ mdurl==0.1.2
     # via markdown-it-py
 pillow==12.3.0
     # via seewo-robot (pyproject.toml)
-platformdirs==4.12.3
+platformdirs==4.12.4
     # via textual
 pygments==2.21.0
     # via
@@ -54,6 +54,8 @@ textual==8.2.8
     # via seewo-robot (pyproject.toml)
 typing-extensions==4.16.0
     # via textual
+tzdata==2026.5
+    # via seewo-robot (pyproject.toml)
 urllib3==2.8.0
     # via requests
 werkzeug==3.1.9

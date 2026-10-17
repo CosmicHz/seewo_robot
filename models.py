@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """数据模型层：进程内数据传输用 dataclass，跨进程边界用 dataclasses.asdict 转换。
 
 - RawMessage：希沃原始消息（msg.get 返回的 result 元素），frozen + slots，只读
@@ -8,6 +7,7 @@
 
 from dataclasses import dataclass, field
 from enum import IntEnum
+from typing import ClassVar
 
 
 def _collect_extra(data: dict, known: set[str]) -> dict:
@@ -294,7 +294,7 @@ class YunbanClass:
             extra=_collect_extra(d, cls._known),
         )
 
-    _known = {
+    _known: ClassVar[set[str]] = {
         "uid",
         "name",
         "roomUid",
@@ -338,7 +338,7 @@ class YunbanStudent:
             extra=_collect_extra(d, cls._known),
         )
 
-    _known = {
+    _known: ClassVar[set[str]] = {
         "name",
         "sid",
         "uid",
@@ -409,7 +409,7 @@ class YunbanEvent:
             extra=_collect_extra(d, cls._known),
         )
 
-    _known = {
+    _known: ClassVar[set[str]] = {
         "name",
         "eventId",
         "eventVersion",
@@ -466,7 +466,7 @@ class YunbanParent:
             extra=_collect_extra(d, cls._known),
         )
 
-    _known = {
+    _known: ClassVar[set[str]] = {
         "parentName",
         "parentPhone",
         "parentUserUid",
@@ -549,7 +549,7 @@ class YunbanNote:
             extra=_collect_extra(d, cls._known),
         )
 
-    _known = {
+    _known: ClassVar[set[str]] = {
         "id",
         "content",
         "type",

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """第 1 层：工具函数（funcs.py）—— px 编解码、聊天记录读写。"""
 
 import dataclasses
@@ -6,8 +5,8 @@ import json
 import os
 
 import pytest
-
 from conftest import msg_obj, px_wrap
+
 from funcs import (
     CorruptChatHistoryError,
     append_message,

@@ -1,10 +1,8 @@
-# -*- coding: utf-8 -*-
-
 import base64
 import dataclasses
 import json
-import time
 import os
+import time
 
 from init import config, project_path
 from models import Message
@@ -45,7 +43,6 @@ def datenow() -> str:
 
 
 def logw(t: str) -> None:
-    global filedate
     log = datenow() + t + "\n"
     log_dir = project_path("logs/")
     dirc = log_dir + filedate + ".log"
@@ -73,8 +70,6 @@ class CorruptChatHistoryError(ValueError, KeyError):
     一次 append 就把真实历史整体覆盖。宁可在启动时直接崩掉，让人立刻发现。
     """
 
-    pass
-
 
 def load_chat_history() -> list[Message]:
     """从文件加载聊天记录（文件不存在视为空记录）。
@@ -92,7 +87,8 @@ def load_chat_history() -> list[Message]:
         data = load_json(path)
         messages = data["messages"] if isinstance(data, dict) else None
         if not isinstance(messages, list):
-            raise ValueError("缺少 messages 列表")
+            # 文件内容的形状校验，语义是"数据坏"而非调用方类型错
+            raise ValueError("缺少 messages 列表")  # noqa: TRY004
         if not all(isinstance(m, dict) for m in messages):
             raise ValueError("messages 元素不是对象")
         return [Message.from_dict(m) for m in messages]

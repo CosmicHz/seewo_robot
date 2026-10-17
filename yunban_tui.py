@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 云班（yunban）TUI —— 三列浏览器 + 选择 + 按钮操作，含考勤与进度条
 
@@ -15,13 +14,14 @@
 
 import asyncio
 import json
+import logging
 import os
+from typing import ClassVar
 
 import requests
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
-from textual.widgets._option_list import Option
 from textual.widgets import (
     Button,
     Footer,
@@ -31,34 +31,39 @@ from textual.widgets import (
     ProgressBar,
     Static,
 )
+from textual.widgets._option_list import Option
 
 from init import project_path, verify
+from models import YunbanEvent
 from yunban import _get_yunban_base
 from yunban_token import yunban_client
-from models import YunbanEvent
 
 BASE = _get_yunban_base()
 HEADERS = yunban_client.headers
 CACHE: dict[tuple, dict] = {}  # key=(method, url) -> 希沃原始返回
 CACHE_FILE = project_path("yunban_cache.json")
 
+_LOGGER = logging.getLogger("seewo.yunban_tui")
+
 
 def _load_cache():
     if os.path.exists(CACHE_FILE):
         try:
-            raw = json.loads(open(CACHE_FILE, encoding="utf-8").read())
+            with open(CACHE_FILE, encoding="utf-8") as f:
+                raw = json.loads(f.read())
             for method, url, data in raw:
                 CACHE[(method, url)] = data
         except Exception:
-            pass
+            _LOGGER.debug("yunban cache load failed", exc_info=True)
 
 
 def _save_cache():
     try:
         data = [[m, u, d] for (m, u), d in CACHE.items()]
-        open(CACHE_FILE, "w", encoding="utf-8").write(json.dumps(data))
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            f.write(json.dumps(data))
     except Exception:
-        pass
+        _LOGGER.debug("yunban cache save failed", exc_info=True)
 
 
 _load_cache()
@@ -250,7 +255,10 @@ class YunbanTUI(App):
     ProgressBar { width: 30; height: 1; display: none; }
     """
 
-    BINDINGS = [("q", "quit", "退出"), ("r", "invalidate_cache", "清缓存并重拉")]
+    BINDINGS: ClassVar[list] = [
+        ("q", "quit", "退出"),
+        ("r", "invalidate_cache", "清缓存并重拉"),
+    ]
 
     def __init__(self) -> None:
         super().__init__()

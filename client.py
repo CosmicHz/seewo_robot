@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
 """
 希沃班牌机器人 API 客户端
 """
 
-import os
 import json
+import os
+
 import requests
 
 from init import config
@@ -16,7 +16,7 @@ DEFAULT_API_URL = f"http://localhost:{config.api_port}"
 class SeewoClient:
     """希沃班牌机器人客户端"""
 
-    def __init__(self, base_url: str = None, api_key: str = None):
+    def __init__(self, base_url: str | None = None, api_key: str | None = None):
         self.base_url = (base_url or DEFAULT_API_URL).rstrip("/")
         self.api_key = api_key or DEFAULT_API_KEY
         self.headers = {"X-API-Key": self.api_key, "Content-Type": "application/json"}
@@ -35,7 +35,7 @@ class SeewoClient:
         """获取消息列表"""
         return self._request("GET", "/api/messages", params={"count": count})
 
-    def send_text(self, content: str, strategy: str = None) -> dict:
+    def send_text(self, content: str, strategy: str | None = None) -> dict:
         """发送文本消息
 
         Args:
@@ -49,8 +49,8 @@ class SeewoClient:
 
     def send_image(
         self,
-        file_path: str = None,
-        file_data: bytes = None,
+        file_path: str | None = None,
+        file_data: bytes | None = None,
         filename: str = "image.png",
     ) -> dict:
         """发送图片

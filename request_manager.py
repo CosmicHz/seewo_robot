@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """统一请求层：所有对希沃的 HTTP 请求经此调度。
 
 职责：
@@ -9,11 +8,13 @@
 后续可引入 queue.Queue + worker 线程串行消费所有请求，调用方接口不变。
 """
 
-import time
-import threading
 import logging
-from init import verify
+import threading
+import time
+
 import requests
+
+from init import verify
 
 logger = logging.getLogger("seewo.request")
 

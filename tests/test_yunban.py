@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """第 2 层：云班 REST（yunban.py）—— 端点 URL、模型转换、考勤/留言请求。
 
 注意：yunban.py 直接 requests.request，绕过 request_manager（无统一节流），

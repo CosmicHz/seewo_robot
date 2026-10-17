@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """第 1 层：数据模型（models.py）—— from_dict 兜底、可变性、跨进程边界转换"""
 
 import dataclasses

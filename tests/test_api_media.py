@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """第 2 层：媒体端点（/api/send_image、/api/send_audio）。
 
 上传动作打桩（upload_file_to_cloud），只验证端点自身的分支与参数传递。
@@ -107,6 +106,7 @@ class TestSendImage:
         self, app_env, auth_headers, tmp_path, monkeypatch
     ):
         import io
+
         import api_server
 
         seen = []

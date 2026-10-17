@@ -1,12 +1,14 @@
-import requests
 import json
 import warnings
-from funcs import pxdecode
-from login import acc
-from init import urls, proxies
-from stu import stu
+
+import requests
+
 from api import api
-from models import MessageResponse, RawMessage, SendResult, SeewoCode
+from funcs import pxdecode
+from init import proxies, urls
+from login import acc
+from models import MessageResponse, RawMessage, SeewoCode, SendResult
+from stu import stu
 
 
 class msg:

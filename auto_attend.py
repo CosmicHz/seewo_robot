@@ -10,7 +10,6 @@ def main():
     classlist = yunban_client.getclasslist()
     students = yunban_client.getstulist(classlist[35].uid)
     events = yunban_client.getevents(classlist[35].roomUid)
-    uidlist = []
     for stu in students:
         # stu=yunban_client.searchstubyuid(uid,students)
         try:
@@ -23,7 +22,6 @@ def main():
         # print(sys.argv[1])
         faketime = yunban_client.randomtime(event)
         datenow = time.strftime("%Y-%m-%d", time.localtime())
-        timenow = time.strftime("%H:%M:%S", time.localtime())
         print(
             yunban_client.attend(
                 stu.name,

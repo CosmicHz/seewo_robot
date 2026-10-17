@@ -1,10 +1,9 @@
-# -*- coding: utf-8 -*-
 """第 2 层：学生信息 DAO（stu.py）"""
 
 import pytest
+from conftest import FakeAccount, decode_action_request, mcampus_url, px_wrap
 
 import stu as stu_module
-from conftest import FakeAccount, decode_action_request, mcampus_url, px_wrap
 
 LIST_ACTION = "GET_STUDENT_V1_PARENT_BYPARENTID_CHILDREN_LIST"
 SEARCH_ACTION = "POST_STUDENT_V1_BYSCHOOLUID_CLASS_BYCLASSUID_STUDENTS"

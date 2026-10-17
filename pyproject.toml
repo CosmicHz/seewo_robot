@@ -12,6 +12,7 @@ dependencies = [
     "requests-toolbelt==1.0.0",
     "sortedcontainers==2.4.0",
     "textual==8.2.8",
+    "tzdata>=2026.5",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +28,15 @@ dev = [
 testpaths = ["tests"]
 # 仓库根加入 sys.path，使 tests/ 内可直接 import 项目模块（项目为扁平模块布局）
 pythonpath = ["."]
+
+[tool.ruff]
+# 使用 ruff 默认规则集（0.16 起扩充）；规则随版本演进，升级 ruff 后需重新审视告警基线
+
+[tool.ruff.lint]
+# BLE001（盲捕 Exception）：现有错误处理体系尚未按调用点收窄
+# （见 AGENTS.md「已知问题：上游错误处理尚未体系化」），
+# 逐点收窄前暂时全局忽略；完成收窄后删除本条。
+ignore = ["BLE001"]
 
 [tool.setuptools.packages.find]
 include = ["seewo_robot*"]
