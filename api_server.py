@@ -1,29 +1,28 @@
-# -*- coding: utf-8 -*-
 """
 希沃班牌机器人 API 服务端
 提供 REST API 接口供客户端调用
 """
 
+import base64
+import json
+import logging
 import os
 import re
-import json
-import time
-import base64
-import logging
-import threading
 import tempfile
-from flask import Flask, request, jsonify
+import threading
+import time
 from functools import wraps
-from typing import Tuple
 
-from init import qrcode_file, token_file, config, reload_config
-from login import acc, download_qrcode, check_qrcode
+from flask import Flask, jsonify, request
+
 from funcs import write_file
-from models import SeewoQrCode, SendResult
-from stu import stu
-from msg import msg
-from upload import upload_file
+from init import config, qrcode_file, reload_config, token_file
+from login import acc, check_qrcode, download_qrcode
 from message_service import MessageDataSource
+from models import SeewoQrCode, SendResult
+from msg import msg
+from stu import stu
+from upload import upload_file
 
 app = Flask(__name__)
 
@@ -195,7 +194,7 @@ def _check_session():
 
 def _send(
     content, type=1, resUrl="", voiceLength=0, resConfig=""
-) -> Tuple[SendResult, bool]:
+) -> tuple[SendResult, bool]:
     """发送留言并对 Token 失效做一次自愈：刷新会话后重发一次。
 
     Token 失效的判定统一走 `SendResult.needs_relogin`（语义见 models.SeewoCode），

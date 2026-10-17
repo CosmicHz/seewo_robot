@@ -1,20 +1,21 @@
-# -*- coding: utf-8 -*-
-
 import json
-import time
 import random
+import time
+from datetime import datetime, timedelta
+from datetime import time as dt_time
+
 import requests
-from datetime import datetime, date, timedelta
-from login import acc
+
 from api import api
-from init import config, verify
+from init import LOCAL_TZ, config, verify
+from login import acc
 from models import (
     SendResult,
     YunbanClass,
-    YunbanStudent,
     YunbanEvent,
-    YunbanParent,
     YunbanNotesPage,
+    YunbanParent,
+    YunbanStudent,
 )
 
 
@@ -160,7 +161,8 @@ class yunban:
             config.get("banPaiConfig") if isinstance(config, dict) else None
         )
         if not isinstance(ban_pai_config, dict):
-            raise ValueError("event.config is missing banPaiConfig")
+            # 接口数据的形状校验，语义是"数据坏"而非调用方类型错
+            raise ValueError("event.config is missing banPaiConfig")  # noqa: TRY004
         try:
             return ban_pai_config["topStartTime"], ban_pai_config["topEndTime"]
         except KeyError as exc:
@@ -190,11 +192,11 @@ class yunban:
             - 如果结束时间早于或等于开始时间，会抛出 ValueError。
         """
         # 解析时间字符串
-        start_time = datetime.strptime(start_str, "%H:%M").time()
-        end_time = datetime.strptime(end_str, "%H:%M").time()
+        start_time = dt_time.fromisoformat(start_str)
+        end_time = dt_time.fromisoformat(end_str)
 
-        # 获取当天日期
-        today = date.today()
+        # 获取当天日期（北京时间）
+        today = datetime.now(tz=LOCAL_TZ).date()
 
         # 组合成完整的 datetime 对象
         start_dt = datetime.combine(today, start_time)

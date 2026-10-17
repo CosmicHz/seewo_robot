@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 全局常量与配置
 
@@ -6,9 +5,10 @@
 统一从 config.json 读取配置，其他模块通过 from init import config 使用。
 """
 
-import time
 import json
 import os
+import time
+from zoneinfo import ZoneInfo
 
 from models import Config
 
@@ -76,6 +76,9 @@ _mock_base = f"http://localhost:{_mock_port}"
 proxies: dict[str, str] = {}  # type: ignore
 # SSL 证书验证开关
 verify = True
+
+# 项目统一本地时区（希沃服务的业务时间均为北京时间）
+LOCAL_TZ = ZoneInfo("Asia/Shanghai")
 
 # 无 Cookie 的公共请求头，用于登录流程（获取二维码、检查扫码状态）
 headers_nocookie = {

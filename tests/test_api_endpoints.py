@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """第 2 层：api_server 核心端点（app.test_client + 假会话 + 临时聊天记录）。
 
 隔离方式见 tests/conftest.py：
@@ -9,9 +8,10 @@
 import json
 
 import pytest
+from conftest import msg_obj, raw_msg, write_chat_history
 
 from api_server import MSG_MAX_LEN
-from conftest import raw_msg, write_chat_history, msg_obj
+from init import LOCAL_TZ
 from models import SendResult
 
 
@@ -160,8 +160,8 @@ class TestMessages:
         msgs = client.get("/api/messages", headers=auth_headers).get_json()["messages"]
         assert [m["sender"] for m in msgs] == ["parent", "student", "unknown"]
         assert [m["senderName"] for m in msgs] == ["家长", "测试学生", "王老师"]
-        # 毫秒时间戳 → 本地时间字符串
-        expected = datetime.fromtimestamp(create_time / 1000).strftime(
+        # 毫秒时间戳 → 北京时间字符串
+        expected = datetime.fromtimestamp(create_time / 1000, tz=LOCAL_TZ).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
         assert msgs[0]["time"] == expected

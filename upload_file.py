@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """一次性登录并上传单个文件到希沃云存储（实现见 upload.upload_file）。"""
 
 import os

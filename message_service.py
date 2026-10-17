@@ -1,20 +1,22 @@
-# -*- coding: utf-8 -*-
 """消息数据源层：独占 chat_history.json 读写 + 格式化 + 内存缓存。
 
 读前检查文件 mtime，变了重新加载（感知 main.py 的 append_message 等外部写入）。
 多页聚合（sync_all 翻页循环）在本层；msg.py 只做单次 DAO。
 """
 
+import dataclasses
 import os
 import time
-import dataclasses
 from datetime import datetime
 from functools import partial
 from operator import attrgetter
+
+from sortedcontainers import SortedKeyList
+
 import funcs
 from funcs import load_chat_history, merge_messages
-from models import RawMessage, Message
-from sortedcontainers import SortedKeyList
+from init import LOCAL_TZ
+from models import Message, RawMessage
 
 _MessageSortedList = partial(SortedKeyList, key=attrgetter("id"))
 
@@ -58,7 +60,9 @@ class MessageDataSource:
         """
         create_time = raw.createTime
         time_str = (
-            datetime.fromtimestamp(create_time / 1000).strftime("%Y-%m-%d %H:%M:%S")
+            datetime.fromtimestamp(create_time / 1000, tz=LOCAL_TZ).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
             if create_time
             else ""
         )

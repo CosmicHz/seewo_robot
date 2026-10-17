@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """第 1 层：长消息拆分算法（api_server._split_long_message）。
 
 不变量：join(chunks) == 原文（不丢字符）、每块 <= max_len、块数最少。

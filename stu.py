@@ -8,9 +8,13 @@ stu 对象是消息收发和云班功能的前置依赖。
 import json
 import warnings
 
-from login import acc
 from api import api
 from funcs import pxdecode, pxencode
+from login import acc
+
+
+class NoStudentError(Exception):
+    """家长账号下未添加任何学生。"""
 
 
 class stu:
@@ -86,7 +90,7 @@ class stu:
             )
         )
         if result == []:
-            raise Exception("错误：未添加学生")
+            raise NoStudentError("错误：未添加学生")
         return result
 
     def get_stu(self, name):

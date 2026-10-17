@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mock Seewo Server - 调试用模拟希沃服务器
 
@@ -27,9 +26,10 @@ import os
 import time
 import uuid
 from datetime import datetime
-from flask import Flask, request, jsonify, Response
 
-from init import project_path
+from flask import Flask, Response, jsonify, request
+
+from init import LOCAL_TZ, project_path
 
 app = Flask(__name__)
 
@@ -796,7 +796,7 @@ def upload_to_cos():
     mock_data.uploads[file_id] = {
         "downloadUrl": download_url,
         "filename": filename,
-        "uploadTime": datetime.now().isoformat(),
+        "uploadTime": datetime.now(tz=LOCAL_TZ).isoformat(),
     }
     print(f"[UPLOAD] {filename} -> {download_url}")
     return jsonify(

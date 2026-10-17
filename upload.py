@@ -1,17 +1,17 @@
-# -*- coding: utf-8 -*-
-
-import os
 import json
-import time
+import mimetypes
+import os
 import random
 import string
-import mimetypes
+import time
+
 import requests
 from requests_toolbelt import MultipartEncoder
-from init import uploads_file
-from funcs import read_file, write_file
-from login import acc
+
 from api import api
+from funcs import read_file, write_file
+from init import uploads_file
+from login import acc
 
 
 def upload_file(account: acc, file, type=None) -> str:
@@ -68,7 +68,6 @@ class Upload:
             self.error = f"策略解析异常: {e}"
         if self.error:
             print("上传不可用: " + self.error)
-        return None
 
     def upload(self, file, type=None):
         """上传文件到云存储。

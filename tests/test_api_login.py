@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """第 2 层：登录端点（/api/login/qrcode、/api/login/status）与后台轮询状态机。"""
 
 import base64
@@ -91,7 +90,7 @@ class TestQrcodeEndpoint:
         self, app_env, auth_headers, login_files, monkeypatch
     ):
         client, _ = app_env
-        monkeypatch.setattr(api_server, "download_qrcode", lambda: {})
+        monkeypatch.setattr(api_server, "download_qrcode", dict)
         resp = client.get("/api/login/qrcode", headers=auth_headers)
         assert resp.status_code == 500
         assert api_server._login_state["in_progress"] is False
@@ -183,7 +182,7 @@ class TestPollLoginThread:
         assert refreshed == []
 
     def test_polls_until_confirmed(self, app_env, monkeypatch, no_sleep):
-        _, fake = app_env
+        _, _fake = app_env
         codes = iter([200, 201, 202])
 
         def check(cookies):

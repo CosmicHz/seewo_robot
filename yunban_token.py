@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 从希沃服务器动态构建云班实例（全局名 `yunban_client`）。
 
@@ -8,10 +7,11 @@
 """
 
 import requests
+
+from init import headers_nocookie, proxies, verify
 from login import acc
 from stu import stu
 from yunban import yunban
-from init import proxies, verify, headers_nocookie
 
 
 def _grab_acw_tc(account: acc) -> str:

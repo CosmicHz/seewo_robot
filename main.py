@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 希沃班牌机器人主程序
 
@@ -8,20 +7,21 @@
 
 # TODO: 多学生选择
 import os
+import sys
 import time
 
+from funcs import append_message, datenow, load_chat_history, logw
+from init import config
 from login import acc
-from funcs import load_chat_history, append_message, datenow, logw
-from stu import stu
 from msg import msg
+from stu import stu
 from upload import upload_file
 from yunban import getpass
-from init import config
 
 account = acc()
 if account.token_expired:  # 超过最大重试次数，登录失败
     print("登录失败，请重试")
-    exit(1)
+    sys.exit(1)
 student = stu(account)
 stu_msg = msg(account, student)
 

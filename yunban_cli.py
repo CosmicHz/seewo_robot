@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 云班（yunban）客户端命令行封装 —— 方便调用 / 测试云班各功能，含考勤。
 
@@ -68,7 +67,7 @@ def cmd_eventtime(event_index):
     except (IndexError, ValueError):
         print(f"[ERROR] 事件索引无效: {event_index}")
         return
-    start, end = yunban_client.geteventtime(event)
+    start, _end = yunban_client.geteventtime(event)
     print(f"eventName={event.name}")
     print(f"randomtime 候选区间 [{start} ~ {event.endTime}]")
     print(f"随机签到时间示例: {yunban_client.randomtime(event)}")

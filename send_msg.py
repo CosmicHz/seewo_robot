@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
 """发送指定消息到班牌"""
 
 import sys
+
 from login import acc
-from stu import stu
 from msg import msg
+from stu import stu
 
 
 def main():

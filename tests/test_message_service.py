@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """第 3 层：消息数据源层（message_service.py）—— 格式化、缓存、分页、同步。
 
 真实 MessageDataSource + 临时 chat_history 文件（打桩点 B）；出网部分用假 stu_msg（打桩点 A）。
@@ -7,9 +6,9 @@
 import json
 
 import pytest
+from conftest import FakeSession, FakeStuMsg, msg_obj, raw_msg, write_chat_history
 
 import message_service as ms_module
-from conftest import FakeSession, FakeStuMsg, raw_msg, write_chat_history, msg_obj
 from message_service import MessageDataSource
 
 
@@ -74,8 +73,10 @@ class TestFormatMsg:
     def test_millisecond_timestamp_formatted(self, source):
         from datetime import datetime
 
+        from init import LOCAL_TZ
+
         m = self._fmt(source, raw_msg(1, createTime=1700000000000))
-        assert m.time == datetime.fromtimestamp(1700000000).strftime(
+        assert m.time == datetime.fromtimestamp(1700000000, tz=LOCAL_TZ).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
 

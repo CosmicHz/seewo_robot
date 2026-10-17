@@ -1,12 +1,11 @@
-# -*- coding: utf-8 -*-
 """第 2 层：文件上传（upload.py）—— 上传策略、multipart 组装、台账写入。"""
 
 import json
 
 import pytest
+from conftest import FakeAccount, mcampus_url
 
 import upload as upload_module
-from conftest import FakeAccount, mcampus_url
 
 POLICY_ACTION = "POST_MOBILE_V1_RESOURCE_CSTORE_UPLOADPOLICY"
 UPLOAD_URL = "https://cos.example.com/upload"

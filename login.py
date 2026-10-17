@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 登录与账户管理
 
@@ -6,15 +5,17 @@
 acc 类封装账户凭证，提供 headers/mheaders 两种请求头分别用于不同的希沃 API 端点。
 """
 
-from qrcode import print_qrcode
-from init import token_file, qrcode_file, proxies, verify, headers_nocookie, urls
-from funcs import load_json, write_file
-from models import SeewoCode, SeewoQrCode
 import json
 import logging
-import requests
-import time
 import os
+import time
+
+import requests
+
+from funcs import load_json, write_file
+from init import headers_nocookie, proxies, qrcode_file, token_file, urls, verify
+from models import SeewoCode, SeewoQrCode
+from qrcode import print_qrcode
 
 logger = logging.getLogger("seewo.login")
 
@@ -45,14 +46,14 @@ class acc:
                     type = 1
                 else:
                     self.token_expired = True
-                    return None
+                    return
             else:
                 info = load_json(token_file)
 
         if type == 1:  # 直接扫码登录
             if not auto_login:
                 self.token_expired = True
-                return None
+                return
             login()
             info = load_json(token_file)
 
@@ -62,10 +63,10 @@ class acc:
 
         for attempt in range(max_retries):
             if self.check_status():
-                return None
+                return
             if not auto_login:
                 self.token_expired = True
-                return None
+                return
             # 重新扫码登录
             print(f"Token无效，重新登录 (第{attempt + 1}次)...")
             login()
@@ -73,7 +74,7 @@ class acc:
             self.uid = info["userId"]
             self._set_headers(info)
         self.token_expired = True
-        return None
+        return
 
     def _set_headers(self, info):
         """根据登录凭证设置请求头"""
@@ -182,9 +183,8 @@ def login():
         status = data["statusCode"]
         message = data["message"]
         print(str(int(time.time())) + ": " + message + str(status), end="\r")
+    if SeewoQrCode.is_confirmed(status):
+        write_file(token_file, json.dumps(data).encode())
+        return True
     else:
-        if SeewoQrCode.is_confirmed(status):
-            write_file(token_file, json.dumps(data).encode())
-            return True
-        else:
-            return False
+        return False

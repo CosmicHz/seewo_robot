@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """第 2 层：登录与账户（login.py）—— 扫码状态机、Token 校验、请求头装配。"""
 
 import json

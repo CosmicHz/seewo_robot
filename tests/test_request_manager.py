@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """第 1 层：统一请求层（request_manager.py）—— 节流与 429 退避重试。"""
 
 import threading

@@ -1,18 +1,23 @@
-# -*- coding: utf-8 -*-
 """
 希沃班牌机器人 TUI 客户端
 基于 Textual 的终端交互界面
 """
 
-import os
 import asyncio
 import base64
+import logging
+import os
+from pathlib import Path
+from typing import ClassVar
+
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
-from textual.widgets import Header, Footer, Static, Button, Input, Checkbox
 from textual.reactive import reactive
+from textual.widgets import Button, Checkbox, Footer, Header, Input, Static
 
 from init import config
+
+_LOGGER = logging.getLogger("seewo.tui_client")
 
 API_KEY = config.api_key
 API_URL = f"http://localhost:{config.api_port}"
@@ -171,7 +176,7 @@ class SeewoTUI(App):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list] = [
         ("q", "quit", "退出"),
         ("r", "refresh", "刷新"),
         ("s", "send", "发送"),
@@ -216,8 +221,11 @@ class SeewoTUI(App):
         try:
             import requests
 
-            resp = requests.get(
-                f"{API_URL}/api/status", headers={"X-API-Key": API_KEY}, timeout=5
+            resp = await asyncio.to_thread(
+                requests.get,
+                f"{API_URL}/api/status",
+                headers={"X-API-Key": API_KEY},
+                timeout=5,
             )
             if resp.status_code == 401 and resp.json().get("need_login"):
                 self.status_text = "Token已过期"
@@ -251,7 +259,8 @@ class SeewoTUI(App):
             import requests
 
             # 获取二维码
-            resp = requests.get(
+            resp = await asyncio.to_thread(
+                requests.get,
                 f"{API_URL}/api/login/qrcode",
                 headers={"X-API-Key": API_KEY},
                 timeout=10,
@@ -273,15 +282,15 @@ class SeewoTUI(App):
                 # 保存二维码图片并渲染为文本
                 temp_file = "temp_qrcode.png"
                 try:
-                    with open(temp_file, "wb") as f:
-                        f.write(base64.b64decode(qr_base64))
+                    qr_bytes = base64.b64decode(qr_base64)
+                    await asyncio.to_thread(Path(temp_file).write_bytes, qr_bytes)
 
                     from qrcode import qrcode_to_text
 
                     qr_text = qrcode_to_text(temp_file)
                 finally:
                     if os.path.exists(temp_file):
-                        os.remove(temp_file)
+                        await asyncio.to_thread(os.remove, temp_file)
 
                 # 显示二维码
                 container.remove_children()
@@ -296,7 +305,8 @@ class SeewoTUI(App):
             while attempt < max_attempts:
                 await asyncio.sleep(2)
                 attempt += 1
-                status_resp = requests.get(
+                status_resp = await asyncio.to_thread(
+                    requests.get,
                     f"{API_URL}/api/login/status",
                     headers={"X-API-Key": API_KEY},
                     timeout=5,
@@ -455,7 +465,7 @@ class SeewoTUI(App):
         else:
             container.scroll_end(animate=False)
 
-    async def send_message(self, content: str, strategy: str = None) -> None:
+    async def send_message(self, content: str, strategy: str | None = None) -> None:
         """发送消息
 
         Args:
@@ -474,11 +484,12 @@ class SeewoTUI(App):
                     if self.query_one("#split-mode", CheckMark).value:
                         strategy = "split"
                 except Exception:
-                    pass
+                    _LOGGER.debug("split-mode checkbox lookup failed", exc_info=True)
             payload = {"content": content}
             if strategy:
                 payload["strategy"] = strategy
-            resp = requests.post(
+            resp = await asyncio.to_thread(
+                requests.post,
                 f"{API_URL}/api/send",
                 headers={"X-API-Key": API_KEY},
                 json=payload,
