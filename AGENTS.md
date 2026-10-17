@@ -40,8 +40,8 @@ uv run python test/test_api.py    # 逐个测试所有 API 端点
 - 依赖的**唯一真源**是 `pyproject.toml`；新增/移除依赖只改这里，改了之后用 `uv sync` 或 `pip install -e ".[dev]"` 安装，**不通过 `requirements.txt` 管理依赖**。
 - `requirements.txt` 是 **pip-compile 生成的锁文件（生成产物），不可手改、不作为依赖清单**；它只是给 pip 用户的可复现版本快照。文档一律引导用户用 `pyproject.toml` 装依赖。
 - `uv.lock` **不跟踪**，由本机 `uv sync` 自动生成；不要把它当作跨环境版本依据。
-- `pre-commit` 钩子（`scripts/hooks/pre-commit`）：**对所有暂存的 `.py` 执行 `ruff format` 并重新暂存**（幂等）；暂存了 `pyproject.toml` 时再用 `pip-compile` 自动重新生成 `requirements.txt` 并暂存。**若本机缺 `ruff` 或 `pip-tools` 则 `exit 1` 阻止提交**（勿 `--no-verify` 绕过）。
-- [`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在 PR 上用与 hook 完全一致的 `pip-compile` 重新生成并对比，拦截任何绕过本机 hook 的锁文件不同步提交；ruff 的 **lint 检查（`ruff check`）当前以注释占位**，将来启用后在此统一执行。格式化为强约束：`ruff format` 已由 pre-commit 在本地强制，PR 的格式问题应在提交前即被拦截。
+- `pre-commit` 钩子（`scripts/hooks/pre-commit`）：**对所有暂存的 `.py` 执行 `ruff format` 并重新暂存**（幂等）；暂存了 `pyproject.toml` 时再用 `pip-compile` 自动重新生成 `requirements.txt` 并暂存（复用已有 pin 的增量编译，不整体重解析）。**若本机缺 `ruff` 或 `pip-tools` 则 `exit 1` 阻止提交**（勿 `--no-verify` 绕过）。
+- [`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在 PR 上用与 hook 完全一致的 `pip-compile` 重新生成并对比，拦截任何绕过本机 hook 的锁文件不同步提交；CI 同时跑 `ruff check` / `ruff format --check` / `pytest`，lint 规则集见 [pyproject.toml](pyproject.toml) `[tool.ruff.lint]`（BLE001 暂全局忽略，见已知问题）。
 
 ## 两条独立运行路径（最高优先级约束）
 
@@ -118,7 +118,7 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 - **[message_service.py](message_service.py)**：消息数据源层。`MessageDataSource` 独占 `chat_history.json` 读写、消息格式化、内存缓存（基于文件 mtime 感知 `main.py` 等外部写入）。`_format_msg(raw: RawMessage) -> Message`；`_messages: list[Message]`；对外方法返回 dict（边界 `dataclasses.asdict` 转 dict 给 jsonify）。`sync_all` 翻页循环在本层。
 - **[models.py](models.py)**：数据模型层。进程内数据传输用 dataclass，跨进程边界（Flask jsonify / 写 chat_history.json / pxencode 网络请求）调 `dataclasses.asdict()` 转换。含 `Config` 配置模型（可变，供 `reload_config` 原地更新实现热重载）。详见 [数据模型层（models.py）](#数据模型层modelspy)。
 - **[api_server.py](api_server.py)**：入口层，handler 薄层化。全局 `session = Session()` + 全局 `datasource = MessageDataSource(session)`（构造时仅 `_refresh` 读 mtime，不碰 session）。
-- **[init.py](init.py)**：全局配置 `config`（`models.Config` dataclass，可变）、`reload_config()`（重读 config.json 原地更新以支持热重载）、文件路径、`_use_mock`、公共请求头 `headers_nocookie`、希沃 URL 集合 `urls`。所有状态文件路径（`config.json`/`tokens.json`/`uploads.json`/`qrcode.png`）由 `project_path()` 基于 `__file__` 锚定到项目根目录，不依赖进程当前工作目录。
+- **[init.py](init.py)**：全局配置 `config`（`models.Config` dataclass，可变）、`reload_config()`（重读 config.json 原地更新以支持热重载）、文件路径、`_use_mock`、公共请求头 `headers_nocookie`、希沃 URL 集合 `urls`、统一本地时区 `LOCAL_TZ`（北京时间；所有业务时间格式化/考勤取数用它，勿用系统本地时区）。所有状态文件路径（`config.json`/`tokens.json`/`uploads.json`/`qrcode.png`）由 `project_path()` 基于 `__file__` 锚定到项目根目录，不依赖进程当前工作目录。
 - **[login.py](login.py)**：`acc` 账户对象 + `download_qrcode` / `check_qrcode` / `login` 流程。`acc(auto_login=True/False)` 控制过期时是否自动触发扫码：`main.py` 用 True，`api_server.py` 用 False。
 - **[stu.py](stu.py)**：学生信息 DAO，不传 `child_uid` 时默认取关联列表第一个学生；按 `child_uid`（userUid）稳定标识选取，不再支持按下标选取（列表顺序不受服务端保证）
 - **[funcs.py](funcs.py)**：工具函数。`chat_log_file()` 每次调用即时按 `config.use_mock` 返回 `chat_history_mock.json` / `chat_history.json` 路径（**不要缓存成模块常量**，配置读后即过期）。`load_chat_history() -> list[Message]`、`append_message` / `merge_messages(messages: list[Message])` 只维护 `messages` 字段，不维护 `earliest_id` / `last_id`；`merge_messages` **不去重**（同 id 重复传入会重复落盘，调用方自行保证）。
