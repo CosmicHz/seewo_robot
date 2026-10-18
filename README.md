@@ -59,6 +59,9 @@ uv sync --extra dev
 
 # 或使用 pip
 pip install -e ".[dev]"
+
+# 激活 pre-commit 钩子（ruff format + 锁文件同步，一次性）
+git config core.hooksPath .githooks
 ```
 
 > [!IMPORTANT]
