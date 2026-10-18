@@ -31,3 +31,42 @@ jobs:
           PIP_CONFIG_FILE=/dev/null pip-compile --no-header --no-emit-index-url --strip-extras --output-file /tmp/requirements.lock pyproject.toml
           diff -u requirements.txt /tmp/requirements.lock \
             || { echo "::error::requirements.txt 与 pyproject.toml 不同步：请在本机提交前运行 pre-commit（pip-compile）重新生成"; exit 1; }
+
+  lint:
+    name: lint & format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project + dev tools
+        run: |
+          pip install -e ".[dev]"
+
+      # 规则集见 pyproject.toml [tool.ruff.lint]（BLE001 暂全局忽略，见 AGENTS.md 已知问题）
+      - name: ruff check
+        run: ruff check .
+
+      - name: ruff format check
+        run: ruff format --check .
+
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project + dev tools
+        run: |
+          pip install -e ".[dev]"
+
+      # 全部用例为进程内 fake/mock，无网络依赖，可安全在 CI 运行
+      - name: Run tests
+        run: pytest -q
