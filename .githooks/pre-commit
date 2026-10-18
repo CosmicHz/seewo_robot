@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # pre-commit: ① 对暂存的 .py 文件执行 ruff format 并重新暂存；② pyproject.toml 变更时，
-# 用 pip-compile 重新生成 requirements.txt 并 stage。
+# 用 pip-compile 增量更新 requirements.txt 并 stage。
 #
 # 依赖真源是 pyproject.toml；requirements.txt 是只读锁文件（生成产物），uv.lock 不跟踪。
+# pip-compile 复用输出文件中已有的 pin（仅解析新增/变更依赖），与 CI 的增量复验一致。
 # 缺 pip-compile 时阻止提交；缺 ruff 时也会阻止提交，避免格式化脱节。
 # ① 仅暂存了 Python 文件时触发（ruff format 幂等，已格式化则无改动）。
 #
 # 激活方式（一次性）：
-#   git config core.hooksPath scripts/hooks
+#   git config core.hooksPath .githooks
 #
 # 跳过方式（临时，会绕过后端校验）：
 #   git commit --no-verify
@@ -43,13 +44,15 @@ if ! command -v pip-compile >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "[pre-commit] 检测到依赖文件变更，用 pip-compile 重新生成 requirements.txt ..."
+echo "[pre-commit] 检测到依赖文件变更，用 pip-compile 增量更新 requirements.txt ..."
 
 # 生成到临时文件，成功后再替换，避免中途失败把锁文件弄坏
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
+# 先以现有锁文件为种子（pip-compile 复用已有 pin，仅做增量解析），
 # 隔离本机 pip 全局配置（镜像/trusted-host），保证锁文件不依赖个人环境、可复现
+cp requirements.txt "$tmp" 2>/dev/null || true
 if ! PIP_CONFIG_FILE=/dev/null pip-compile --no-header --no-emit-index-url --strip-extras --output-file "$tmp" pyproject.toml >/dev/null 2>&1; then
     echo "[pre-commit] 错误：pip-compile 重新生成 requirements.txt 失败" >&2
     exit 1

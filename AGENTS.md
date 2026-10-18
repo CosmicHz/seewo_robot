@@ -40,7 +40,7 @@ uv run python test/test_api.py    # 逐个测试所有 API 端点
 - 依赖的**唯一真源**是 `pyproject.toml`；新增/移除依赖只改这里，改了之后用 `uv sync` 或 `pip install -e ".[dev]"` 安装，**不通过 `requirements.txt` 管理依赖**。
 - `requirements.txt` 是 **pip-compile 生成的锁文件（生成产物），不可手改、不作为依赖清单**；它只是给 pip 用户的可复现版本快照。文档一律引导用户用 `pyproject.toml` 装依赖。
 - `uv.lock` **不跟踪**，由本机 `uv sync` 自动生成；不要把它当作跨环境版本依据。
-- `pre-commit` 钩子（`scripts/hooks/pre-commit`）：**对所有暂存的 `.py` 执行 `ruff format` 并重新暂存**（幂等）；暂存了 `pyproject.toml` 时再用 `pip-compile` 自动重新生成 `requirements.txt` 并暂存（复用已有 pin 的增量编译，不整体重解析）。**若本机缺 `ruff` 或 `pip-tools` 则 `exit 1` 阻止提交**（勿 `--no-verify` 绕过）。
+- `pre-commit` 钩子（`.githooks/pre-commit`，激活：`git config core.hooksPath .githooks`）：**对所有暂存的 `.py` 执行 `ruff format` 并重新暂存**（幂等）；暂存了 `pyproject.toml` 时再用 `pip-compile` 自动增量更新 `requirements.txt` 并暂存（复用已有 pin，不整体重解析）。**若本机缺 `ruff` 或 `pip-tools` 则 `exit 1` 阻止提交**（勿 `--no-verify` 绕过）。
 - [`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在 PR 上用与 hook 完全一致的 `pip-compile` 重新生成并对比，拦截任何绕过本机 hook 的锁文件不同步提交；CI 同时跑 `ruff check` / `ruff format --check` / `pytest`，lint 规则集见 [pyproject.toml](pyproject.toml) `[tool.ruff.lint]`（BLE001 暂全局忽略，见已知问题）。
 
 ## 两条独立运行路径（最高优先级约束）
