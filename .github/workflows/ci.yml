@@ -22,11 +22,12 @@ jobs:
         run: |
           pip install -e ".[dev]"
 
-      # 用与 pre-commit 完全一致的命令重新生成，对比仓库内已提交的 requirements.txt。
-      # 若不一致则失败，拦截绕过本机 hook（--no-verify）提交的 PR。
-      # PIP_CONFIG_FILE=/dev/null 隔离本机镜像配置，确保锁文件仅由 pyproject.toml 决定。
+      # 增量复验：先把仓库内 requirements.txt 作为输出种子，pip-compile 会复用其中
+      # 已有的 pin（仅解析新增/变更的依赖），而不是从零重新解析——上游发布新版本
+      # 不会导致本检查误报。与本地 pre-commit 行为完全一致。
       - name: Verify requirements.txt is in sync
         run: |
+          cp requirements.txt /tmp/requirements.lock
           PIP_CONFIG_FILE=/dev/null pip-compile --no-header --no-emit-index-url --strip-extras --output-file /tmp/requirements.lock pyproject.toml
           diff -u requirements.txt /tmp/requirements.lock \
             || { echo "::error::requirements.txt 与 pyproject.toml 不同步：请在本机提交前运行 pre-commit（pip-compile）重新生成"; exit 1; }
