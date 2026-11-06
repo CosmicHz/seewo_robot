@@ -273,21 +273,56 @@ class TestConcurrency:
         assert ids == sorted(ids, key=lambda i: int(i[2:]))
 
     def test_poll_is_serialised(self, service, provider):
-        """并发 poll 不会让 Provider 被并发调用"""
+        """#30：并发 poll 时 Provider 不会被**同时**调用（检测重叠，不只数次数）"""
+        import time
+
+        active = 0
+        max_active = 0
+        guard = threading.Lock()
         calls = []
         original = provider.poll
 
-        def counting_poll(cursor=None, limit=50):
-            calls.append(1)
-            return original(cursor=cursor, limit=limit)
+        def tracking_poll(cursor=None, limit=50):
+            nonlocal active, max_active
+            with guard:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.02)  # 给其它线程插入的机会
+            try:
+                calls.append(1)
+                return original(cursor=cursor, limit=limit)
+            finally:
+                with guard:
+                    active -= 1
 
-        provider.poll = counting_poll
+        provider.poll = tracking_poll
         threads = [threading.Thread(target=service.poll_once) for _ in range(5)]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
-        assert len(calls) == 5  # 每次 poll 都完成，没有被吞
+        assert len(calls) == 5
+        assert max_active == 1
+
+    def test_concurrent_ingest_dispatches_once(self, service):
+        """#14：多个线程同时 ingest 同一 id，只接收并派发一次"""
+        events = _events(service)
+        barrier = threading.Barrier(8)
+        results = []
+
+        def worker():
+            barrier.wait()
+            results.append(
+                service.ingest([Message(id="dup", platform="fake", timestamp=1)])
+            )
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert sum(len(r) for r in results) == 1
+        assert len([e for e in events if e.type is EventType.MESSAGE]) == 1
 
 
 # ============================ 状态机 ============================
@@ -335,11 +370,70 @@ class TestErrorPropagation:
             service.poll_once()
         assert any(e.type is EventType.ERROR for e in events)
 
-    def test_poll_auth_error_sets_session_expired(self, service, provider):
+    def test_poll_auth_error_refreshes_and_retries_once(self, service, provider):
+        """#15：拉取遇认证失效 → 刷新凭证 → 用原游标重试一次（与 send 对称）"""
+        provider.emit_text("a", message_id="m1")
         provider.fail_next_poll(ProviderAuthError("凭证失效"))
-        with pytest.raises(ProviderAuthError):
+        accepted = service.poll_once()
+        assert [m.id for m in accepted] == ["m1"]
+        assert provider.refresh_calls == 1
+        assert service.session_expired is False
+
+    def test_poll_auth_error_with_failed_refresh_raises_session_expired(
+        self, service, provider
+    ):
+        events = _events(service)
+        provider.expire_auth()
+        provider.fail_next_poll(ProviderAuthError("凭证失效"))
+        with pytest.raises(SessionExpiredError):
             service.poll_once()
         assert service.session_expired is True
+        errors = [e for e in events if e.type is EventType.ERROR]
+        assert len(errors) == 1
+        assert errors[0].data.get("auth_expired") is True
+
+    def test_poll_auth_error_twice_raises_session_expired(self, service, provider):
+        """刷新成功但重试仍认证失效 → 只重试一次，不循环"""
+        original = provider.poll
+        calls = []
+
+        def always_auth_fail(cursor=None, limit=50):
+            calls.append(1)
+            raise ProviderAuthError("仍失效")
+
+        provider.poll = always_auth_fail
+        with pytest.raises(SessionExpiredError):
+            service.poll_once()
+        assert len(calls) == 2
+        provider.poll = original
+
+    def test_poll_forever_emits_one_error_per_failure(self, service, provider):
+        """#16：一次拉取失败只派发一个 ERROR 事件"""
+        events = _events(service)
+        provider.fail_next_poll(ProviderConnectionError("网络断了"))
+        with pytest.raises(ProviderConnectionError):
+            service.poll_forever(interval=0, max_consecutive_errors=1)
+        assert len([e for e in events if e.type is EventType.ERROR]) == 1
+
+    def test_retry_business_failure_emits_message_failed(self, service, provider):
+        """#17：刷新后重试遇非认证失败，也要派发 MESSAGE_FAILED"""
+        events = _events(service)
+        original = provider._send
+        state = {"n": 0}
+
+        def flaky(outgoing):
+            state["n"] += 1
+            if state["n"] == 1:
+                raise ProviderAuthError("失效")
+            raise ProviderBusinessError("被拒")
+
+        provider._send = flaky
+        with pytest.raises(ProviderBusinessError):
+            service.send([Segment.text_seg("x")])
+        failed = [e for e in events if e.type is EventType.MESSAGE_FAILED]
+        assert len(failed) == 1
+        assert "被拒" in failed[0].error
+        provider._send = original
 
     def test_send_error_raises_and_emits_failed_event(self, service, provider):
         events = _events(service)

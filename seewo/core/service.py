@@ -88,7 +88,8 @@ class MessageService:
         self._any_handlers: list[EventHandler] = []
 
         self._lock = threading.RLock()
-        self._ingest_lock = threading.Lock()
+        #: 可重入：`poll_once` 持锁后会调用同样持锁的公开 `ingest`
+        self._ingest_lock = threading.RLock()
         self._dispatch_lock = threading.RLock()
 
         self._now_ms = now_ms or (lambda: int(time.time() * 1000))
@@ -245,6 +246,12 @@ class MessageService:
         Returns:
             实际**新接收**（非重复）的消息，按 `(timestamp, id)` 升序。
         """
+        # 串行化：公开 `ingest` 也可能被直接调用（如回调式 Provider），
+        # 去重检查与记录之间不能被其它线程插入，否则同一 id 会派发两次。
+        with self._ingest_lock:
+            return self._ingest_locked(messages)
+
+    def _ingest_locked(self, messages: Iterable[Message]) -> tuple[Message, ...]:
         accepted: list[Message] = []
         for message in messages:
             if not message.id:
@@ -286,10 +293,8 @@ class MessageService:
         with self._ingest_lock:
             cursor = self._store.last_cursor()
             try:
-                result: PollResult = self._provider.poll(cursor=cursor, limit=limit)
-            except ProviderAuthError as e:
-                self._session_expired = True
-                self._emit_error(f"认证失败: {e}", data={"auth_expired": True})
+                result: PollResult = self._poll_with_refresh(cursor, limit)
+            except SessionExpiredError:
                 raise
             except ProviderError as e:
                 self._emit_error(f"拉取失败: {e}", data={"retryable": e.retryable})
@@ -299,6 +304,28 @@ class MessageService:
             if result.cursor is not None:
                 self._store.save_cursor(result.cursor)
             return accepted
+
+    def _poll_with_refresh(self, cursor: str | None, limit: int) -> PollResult:
+        """拉取；认证失效时刷新凭证并**重试恰好一次**（与 `send` 对称）。
+
+        拉取是只读操作，重试安全。刷新失败或重试仍认证失效 →
+        派发 ERROR 并抛 `SessionExpiredError`。
+        """
+        try:
+            return self._provider.poll(cursor=cursor, limit=limit)
+        except ProviderAuthError as e:
+            logger.warning("拉取遇认证失效，刷新凭证后重试一次: %s", e)
+            self._session_expired = True
+            if not self._refresh_session():
+                self._emit_error(f"会话已失效: {e}", data={"auth_expired": True})
+                raise SessionExpiredError(str(e)) from e
+        try:
+            result = self._provider.poll(cursor=cursor, limit=limit)
+        except ProviderAuthError as e2:
+            self._emit_error(f"会话已失效: {e2}", data={"auth_expired": True})
+            raise SessionExpiredError(str(e2)) from e2
+        self._session_expired = False
+        return result
 
     def poll_forever(
         self,
@@ -319,12 +346,12 @@ class MessageService:
             try:
                 self.poll_once(limit=limit)
                 consecutive_errors = 0
-            except ProviderError as e:
+            except (ProviderError, SessionExpiredError) as e:
+                # ERROR 事件已由 poll_once 派发，这里不再重复派发
                 consecutive_errors += 1
                 logger.warning(
                     "拉取失败(%d/%d): %s", consecutive_errors, max_consecutive_errors, e
                 )
-                self._emit_error(str(e), data={"retryable": e.retryable})
                 if consecutive_errors >= max_consecutive_errors:
                     raise
             stop.wait(interval)
@@ -377,16 +404,12 @@ class MessageService:
                 self._session_expired = True
                 self._emit_error(f"会话已失效: {e2}", data={"auth_expired": True})
                 raise SessionExpiredError(str(e2)) from e2
+            except ProviderError as e2:
+                # 重试的非认证失败也要通知订阅者（否则只有首发失败才有事件）
+                self._emit_send_failed(conversation_id, e2)
+                raise
         except ProviderError as e:
-            self._dispatch(
-                Event(
-                    type=EventType.MESSAGE_FAILED,
-                    conversation_id=conversation_id,
-                    timestamp=self._now_ms(),
-                    error=str(e),
-                    data={"retryable": e.retryable},
-                )
-            )
+            self._emit_send_failed(conversation_id, e)
             raise
 
         self._session_expired = False
@@ -399,6 +422,17 @@ class MessageService:
             )
         )
         return message
+
+    def _emit_send_failed(self, conversation_id: str, error: ProviderError) -> None:
+        self._dispatch(
+            Event(
+                type=EventType.MESSAGE_FAILED,
+                conversation_id=conversation_id,
+                timestamp=self._now_ms(),
+                error=str(error),
+                data={"retryable": error.retryable},
+            )
+        )
 
     def _refresh_session(self) -> bool:
         """尝试刷新凭证。

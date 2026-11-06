@@ -277,7 +277,7 @@ class IntegrationServer:
         return min(base, self.config.reconnect_max_delay)
 
     def should_retry(self, attempt: int) -> bool:
-        """是否还允许重连。"""
+        """已尝试 `attempt` 次后，是否还允许再尝试一次。"""
         if self.config.max_reconnect_attempts <= 0:
             return True
         return attempt < self.config.max_reconnect_attempts
@@ -293,10 +293,11 @@ class IntegrationServer:
         """
         attempt = 0
         while not self._stop.is_set():
-            attempt += 1
+            # 先判断再计数：`max_reconnect_attempts=N` 恰好尝试 N 次
             if not self.should_retry(attempt):
-                logger.error("重连次数超过上限 (%d)，放弃", attempt)
+                logger.error("重连次数达到上限 (%d)，放弃", attempt)
                 return
+            attempt += 1
             delay = self.backoff_delay(attempt)
             logger.info("第 %d 次重连，%.1fs 后尝试", attempt, delay)
             if self._stop.wait(delay):
@@ -311,7 +312,6 @@ class IntegrationServer:
                 continue
             try:
                 on_connected(conn)
-                attempt = 0
                 return
             except Exception as e:
                 logger.warning("重连后初始化失败: %s", e)

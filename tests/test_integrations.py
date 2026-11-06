@@ -589,8 +589,25 @@ class TestIntegrationInfrastructure:
     def test_should_retry_respects_limit(self, service):
         ob = OneBot11Adapter(service)
         ob.config.max_reconnect_attempts = 2
+        # 语义：已尝试 N 次后是否还能再试 —— max=2 时 0、1 次后可再试，2 次后停
+        assert ob.should_retry(0) is True
         assert ob.should_retry(1) is True
         assert ob.should_retry(2) is False
+
+    @pytest.mark.parametrize("limit", [1, 2, 3])
+    def test_reconnect_loop_attempts_exactly_limit(self, service, limit):
+        """#18：max_reconnect_attempts=N 时 connect_fn 恰好被调用 N 次"""
+        ob = OneBot11Adapter(service)
+        ob.config.max_reconnect_attempts = limit
+        ob.config.reconnect_base_delay = 0
+        calls = []
+
+        def failing_connect():
+            calls.append(1)
+            raise ConnectionError("down")
+
+        ob.reconnect_loop(failing_connect, lambda conn: None)
+        assert len(calls) == limit
 
     def test_should_retry_unlimited_by_default(self, service):
         ob = OneBot11Adapter(service)
