@@ -243,7 +243,8 @@ class TestSeewoProvider:
         assert caps.send_mention is False  # 希沃留言无提及
         assert caps.send_quote is False
         assert caps.max_text_length == 199  # 希沃服务端硬上限 200
-        assert caps.supports_history is True
+        # Provider.history() 未实现平台侧回溯 → 如实申报 False（#26）
+        assert caps.supports_history is False
         assert caps.supports_stream is False  # 希沃是轮询式
 
     def test_capabilities_change_with_uploader(self):
@@ -302,23 +303,33 @@ class TestSeewoProvider:
         with pytest.raises(ProviderBusinessError):
             provider.poll()
 
-    def test_poll_cursor_maps_to_page_number(self):
+    def test_poll_always_fetches_latest_page(self):
+        """#27：每次都拉第 1 页（最新），不随游标往旧页翻。"""
         provider, stu_msg = _seewo_provider()
         provider.connect()
-        provider.poll(cursor="3", limit=10)
-        assert stu_msg.get_calls[-1] == (10, 3)
+        for cursor in (None, "1", "3", "garbage"):
+            provider.poll(cursor=cursor, limit=10)
+        assert [start for _, start in stu_msg.get_calls] == [1, 1, 1, 1]
 
-    def test_poll_invalid_cursor_falls_back_to_page_one(self):
-        provider, stu_msg = _seewo_provider()
+    def test_poll_returns_no_cursor(self):
+        """希沃无增量游标：如实返回 None，不伪造页码游标。"""
+        provider, _ = _seewo_provider(result=[_raw(1)])
         provider.connect()
-        provider.poll(cursor="garbage", limit=10)
-        assert stu_msg.get_calls[-1] == (10, 1)
+        assert provider.poll(limit=10).cursor is None
 
-    def test_poll_zero_cursor_falls_back_to_page_one(self):
+    def test_new_message_on_first_page_is_picked_up_after_empty_poll(self):
+        """#27 回归：空页之后第 1 页出现新消息，下一次 poll 能拿到。"""
         provider, stu_msg = _seewo_provider()
         provider.connect()
-        provider.poll(cursor="0", limit=10)
-        assert stu_msg.get_calls[-1] == (10, 1)
+        assert provider.poll(limit=10).messages == ()
+        stu_msg._result = [_raw(7)]
+        assert [m.id for m in provider.poll(limit=10).messages] == ["7"]
+
+    def test_poll_token_expired_code_raises_auth_error(self):
+        provider, _ = _seewo_provider(status_code=-505)
+        provider.connect()
+        with pytest.raises(ProviderAuthError):
+            provider.poll()
 
     def test_connect_without_session_raises(self):
         provider = SeewoProvider(None, None, None)
@@ -341,7 +352,9 @@ class TestSeewoProvider:
         assert stu_msg.sent[0]["type"] == 1
         assert stu_msg.sent[0]["content"] == "你好"
 
-    def test_send_image_uploads_first(self):
+    def test_send_image_uploads_first(self, tmp_path):
+        local = tmp_path / "a.png"
+        local.write_bytes(b"png")
         uploaded = []
 
         def uploader(path):
@@ -350,17 +363,73 @@ class TestSeewoProvider:
 
         provider, stu_msg = _seewo_provider(uploader=uploader)
         provider.connect()
-        provider.send(OutgoingMessage(segments=(Segment.image("local/a.png"),)))
-        assert uploaded == ["local/a.png"]
+        provider.send(OutgoingMessage(segments=(Segment.image(str(local)),)))
+        assert uploaded == [str(local)]
         assert stu_msg.sent[0]["type"] == 2
         assert stu_msg.sent[0]["resUrl"] == "http://cdn/uploaded.png"
 
-    def test_send_image_upload_failure_raises(self):
+    def test_send_image_upload_failure_raises(self, tmp_path):
+        local = tmp_path / "a.png"
+        local.write_bytes(b"png")
         provider, stu_msg = _seewo_provider(uploader=lambda p: "")
         provider.connect()
         with pytest.raises(ProviderBusinessError):
-            provider.send(OutgoingMessage(segments=(Segment.image("local/a.png"),)))
+            provider.send(OutgoingMessage(segments=(Segment.image(str(local)),)))
         assert stu_msg.sent == []
+
+    def test_send_remote_url_is_rejected_without_upload(self):
+        """B6：上传器只接受本地文件；http URL 不当作路径上传。"""
+        uploaded = []
+        provider, stu_msg = _seewo_provider(
+            uploader=lambda p: uploaded.append(p) or "http://cdn/x"
+        )
+        provider.connect()
+        with pytest.raises(CapabilityError) as exc:
+            provider.send(OutgoingMessage(segments=(Segment.image("http://x/a.png"),)))
+        assert exc.value.capability == "send_image"
+        assert uploaded == []
+        assert stu_msg.sent == []
+
+    def test_send_text_with_media_is_rejected(self, tmp_path):
+        """#28：媒体留言不带文本，混发会静默丢文字 → 拒绝而不是谎报成功。"""
+        local = tmp_path / "a.png"
+        local.write_bytes(b"png")
+        provider, stu_msg = _seewo_provider(uploader=lambda p: "http://cdn/x")
+        provider.connect()
+        with pytest.raises(CapabilityError) as exc:
+            provider.send(
+                OutgoingMessage(
+                    segments=(Segment.text_seg("看图"), Segment.image(str(local)))
+                )
+            )
+        assert exc.value.capability == "text_with_media"
+        assert stu_msg.sent == []
+
+    def test_send_multiple_media_is_rejected(self, tmp_path):
+        """B6：一条留言只有一个 resUrl，多媒体不能只发第一个。"""
+        a, b = tmp_path / "a.png", tmp_path / "b.png"
+        a.write_bytes(b"1")
+        b.write_bytes(b"2")
+        provider, stu_msg = _seewo_provider(uploader=lambda p: "http://cdn/x")
+        provider.connect()
+        with pytest.raises(CapabilityError) as exc:
+            provider.send(
+                OutgoingMessage(segments=(Segment.image(str(a)), Segment.image(str(b))))
+            )
+        assert exc.value.capability == "multiple_media"
+        assert stu_msg.sent == []
+
+    def test_sent_message_has_no_fabricated_id(self):
+        """B5：希沃不返回服务端消息 id，回执 id 如实留空。"""
+        provider, _ = _seewo_provider()
+        provider.connect()
+        sent = provider.send(OutgoingMessage(segments=(Segment.text_seg("hi"),)))
+        assert sent.id == ""
+
+    def test_history_is_rejected_as_unsupported(self):
+        provider, _ = _seewo_provider()
+        with pytest.raises(CapabilityError):
+            provider.history()
 
     def test_send_without_uploader_is_rejected_by_capability_gate(self):
         """未配置上传器 → 能力申报 send_image=False → 发送前即被拦下。
@@ -391,3 +460,37 @@ class TestSeewoProvider:
         # 中立模型的字段名不含希沃专有词
         assert "resUrl" not in message.to_dict()
         assert message.to_dict()["platform"] == "seewo"
+
+
+class TestFakeProviderHistory:
+    """FakeProvider 申报 supports_history=True，必须真的实现 history()。"""
+
+    def test_history_returns_emitted_in_order(self):
+        p = FakeProvider()
+        p.emit_text("a", message_id="m1")
+        p.emit_text("b", message_id="m2")
+        p.emit_text("c", message_id="m3")
+        assert [m.id for m in p.history()] == ["m1", "m2", "m3"]
+
+    def test_history_before_excludes_cursor_and_later(self):
+        p = FakeProvider()
+        for i in range(1, 4):
+            p.emit_text(str(i), message_id=f"m{i}")
+        assert [m.id for m in p.history(before="m3")] == ["m1", "m2"]
+
+    def test_history_limit_keeps_latest(self):
+        p = FakeProvider()
+        for i in range(1, 5):
+            p.emit_text(str(i), message_id=f"m{i}")
+        assert [m.id for m in p.history(limit=2)] == ["m3", "m4"]
+
+    def test_history_filters_conversation(self):
+        p = FakeProvider()
+        p.emit_text("a", message_id="m1", conversation_id="c1")
+        p.emit_text("b", message_id="m2", conversation_id="c2")
+        assert [m.id for m in p.history(conversation_id="c2")] == ["m2"]
+
+    def test_history_unknown_before_returns_empty(self):
+        p = FakeProvider()
+        p.emit_text("a", message_id="m1")
+        assert p.history(before="nope") == ()

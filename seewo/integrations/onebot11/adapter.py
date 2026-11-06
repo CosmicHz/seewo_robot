@@ -362,7 +362,9 @@ class OneBot11Adapter(IntegrationServer):
             conversation_id=outgoing.conversation_id,
             user_id=outgoing.user_id,
         )
-        return {"message_id": sent.id}
+        # 平台不返回服务端消息 id 时（如希沃）如实给 null，不伪造一个
+        # get_msg 查不到的 id。
+        return {"message_id": sent.id or None}
 
     def _api_get_msg(self, params: dict[str, Any]) -> Any:
         message_id = str(params.get("message_id", ""))

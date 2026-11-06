@@ -18,9 +18,11 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from ..errors import (
+    CapabilityError,
     ProviderAuthError,
     ProviderBusinessError,
     ProviderConnectionError,
@@ -39,6 +41,14 @@ from ..models import (
 from ..provider.base import OutgoingMessage, PollResult, Provider
 
 logger = logging.getLogger("seewo.provider")
+
+#: 段类型 → 能力字段名（用于 CapabilityError.capability）
+_CAPABILITY_BY_TYPE = {
+    SegmentType.IMAGE: "send_image",
+    SegmentType.AUDIO: "send_audio",
+    SegmentType.VIDEO: "send_video",
+    SegmentType.FILE: "send_file",
+}
 
 
 class SeewoProvider(Provider):
@@ -76,7 +86,9 @@ class SeewoProvider(Provider):
             max_text_length=199,  # 希沃服务端硬上限 200 字，客户端留 1 字余量
             supports_receipt=True,  # 响应体 statusCode 即业务确认
             supports_recall=False,  # 协议层虽有 DELETE_KIDNOTE_V1_NOTE，本项目未开放
-            supports_history=True,
+            # Provider.history() 未实现平台侧回溯：如实申报 False。
+            # 本地历史由核心层 Store 提供（`/api/v2/history`），不经 Provider。
+            supports_history=False,
             supports_stream=False,  # 希沃为轮询式，无推送
         )
 
@@ -130,25 +142,32 @@ class SeewoProvider(Provider):
     def poll(self, cursor: str | None = None, limit: int = 50) -> PollResult:
         """拉取最新一页留言。
 
-        游标语义：希沃的 `start` 是 **1-based 页码**（1=最新一页），
-        不是"最后一条消息 id"，所以游标只能表达"已经同步到第几页"。
-        真正的增量去重由核心层按消息 id 完成（见 `MessageService.ingest`），
-        这里把页码作为游标，供断线重连后从断点页继续。
+        **每次都拉第 1 页**（`start=1` = 最新一页，见 `msg.get` 的已验证语义），
+        增量去重由核心层按消息 id 完成（`MessageService.ingest`）。
+
+        此前把页码当游标、每次 +1 往更旧的页翻：翻到空页后再也回不到
+        第 1 页，新消息永远拉不到。希沃没有「某 id 之后」的增量接口，
+        因此本 Provider **不提供游标**（返回 `cursor=None`，入参被忽略）。
+
+        已知边界：两次 poll 之间新到的留言多于 `limit` 条时，超出部分本次
+        拉不到（历史补拉请用 v1 的 `/api/sync_all`）。
         """
+        del cursor  # 见 docstring：希沃无增量游标
         if self._stu_msg is None:
             raise ProviderConnectionError("希沃会话未初始化", retryable=False)
-        start = self._parse_cursor(cursor)
         try:
-            response = self._stu_msg.get(limit, start=start)
+            response = self._stu_msg.get(limit, start=1)
         except ProviderError:
             raise
         except Exception as e:
             raise self._translate(e) from e
 
+        from models import SeewoCode
+
         code = getattr(response, "statusCode", 0)
-        if code in (-500, -505):
+        if SeewoCode.is_relogin_code(code):
             raise ProviderAuthError(f"希沃凭证失效（业务码 {code}）")
-        if code and code != 200:
+        if code and not SeewoCode.is_ok(code):
             raise ProviderBusinessError(
                 f"希沃返回业务错误码 {code}: {getattr(response, 'message', '')}"
             )
@@ -156,20 +175,9 @@ class SeewoProvider(Provider):
         messages = tuple(self._to_message(raw) for raw in response.result)
         return PollResult(
             messages=messages,
-            cursor=str(start + 1),
+            cursor=None,
             has_more=len(response.result) >= limit,
         )
-
-    @staticmethod
-    def _parse_cursor(cursor: str | None) -> int:
-        """把游标解回页码。非法游标回落第 1 页（最新）。"""
-        if not cursor:
-            return 1
-        try:
-            page = int(cursor)
-        except (TypeError, ValueError):
-            return 1
-        return max(page, 1)
 
     def _to_message(self, raw: Any) -> Message:
         """希沃原始消息 → 平台中立消息。"""
@@ -245,12 +253,25 @@ class SeewoProvider(Provider):
             else:
                 media.append(seg)
 
+        if media:
+            # 以下组合希沃协议是否支持**未经验证**，不猜测，直接拒绝：
+            # - 文本 + 媒体：`msg.send` 在 type=2/3 时不带 content，文本会被静默丢弃
+            # - 多个媒体：一条留言只有一个 resUrl
+            if len(media) > 1:
+                raise CapabilityError("multiple_media", "希沃一条留言只能携带一个媒体")
+            if "".join(text_parts):
+                raise CapabilityError(
+                    "text_with_media", "希沃媒体留言不携带文本，请分开发送"
+                )
+
         try:
             if media:
                 return self._send_media(text_parts, media)
             content = "".join(text_parts)
             result = self._stu_msg.send(content, 1)
-        except ProviderError:
+        except (ProviderError, CapabilityError):
+            # CapabilityError 不是 ProviderError：必须原样上抛，
+            # 否则会被下面的兜底改写成「上游失败」，掩盖能力缺口
             raise
         except Exception as e:
             raise self._translate(e) from e
@@ -269,6 +290,12 @@ class SeewoProvider(Provider):
             raise ProviderError("希沃 Provider 未配置上传能力，无法发送媒体")
 
         seg = media[0]
+        # 上传器只接受**本地文件路径**；http URL 等远程地址不代为下载。
+        if not seg.url or not os.path.isfile(seg.url):
+            raise CapabilityError(
+                _CAPABILITY_BY_TYPE.get(seg.type, "send_file"),
+                f"希沃媒体发送只接受服务端本地文件路径，收到: {seg.url!r}",
+            )
         url = self._uploader(seg.url)
         if not url:
             raise ProviderBusinessError(f"媒体上传失败: {seg.url}")
@@ -317,7 +344,8 @@ class SeewoProvider(Provider):
             else:
                 segments.append(seg)
         return Message(
-            id=f"seewo-sent-{self._conversation_id()}",
+            # 希沃发送接口不返回服务端消息 id：如实留空，不伪造回执 id
+            id="",
             platform=self.platform,
             conversation_id=self._conversation_id(),
             user_id=getattr(self._account, "uid", ""),

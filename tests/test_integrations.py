@@ -118,6 +118,22 @@ class TestOneBotApi:
         assert result["data"]["message_id"]
         assert provider.sent[0].segments[0].text == "你好"
 
+    def test_send_msg_without_platform_id_returns_null(self, service, provider):
+        """平台不返回消息 id（如希沃）→ message_id 为 null，不伪造一个查不到的 id"""
+        from seewo.models import Role
+
+        def no_id_send(outgoing):
+            return Message(id="", platform="fake", role=Role.SELF)
+
+        provider._send = no_id_send
+        ob = OneBot11Adapter(service)
+        result = ob.handle_api(
+            "send_msg",
+            {"message_type": "private", "message": "你好", "user_id": "u1"},
+        )
+        assert result["status"] == "ok"
+        assert result["data"]["message_id"] is None
+
     def test_send_msg_rejects_group(self, service, provider):
         """不支持群聊时明确失败，不静默降级"""
         ob = OneBot11Adapter(service)

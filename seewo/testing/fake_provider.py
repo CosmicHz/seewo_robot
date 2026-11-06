@@ -192,5 +192,34 @@ class FakeProvider(Provider):
         self.remembered.append(message_id)
         return True
 
+    def history(
+        self, conversation_id: str = "", before: str | None = None, limit: int = 50
+    ) -> tuple[Message, ...]:
+        """平台侧历史：按投递顺序返回已投递的消息。
+
+        - ``conversation_id`` 非空时只取该会话
+        - ``before`` 为消息 id 时只取它**之前**投递的消息（不含自身）
+        - 返回最近的 ``limit`` 条，旧→新
+        """
+        if not self.capabilities.supports_history:
+            from ..errors import CapabilityError
+
+            raise CapabilityError("supports_history", "fake 不支持拉取历史")
+        with self._lock:
+            log = list(self._log)
+            cutoff = self._seq_of.get(before) if before else None
+        if before and cutoff is None:
+            # 未知的 before 游标：无法确定「之前」是哪些，不返回全部冒充结果
+            return ()
+        selected = [
+            m
+            for seq, m in log
+            if (not conversation_id or m.conversation_id == conversation_id)
+            and (cutoff is None or seq < cutoff)
+        ]
+        if limit > 0:
+            selected = selected[-limit:]
+        return tuple(selected)
+
 
 __all__ = ["ConnectionState", "FakeProvider", "ProviderAuthError", "SegmentType"]

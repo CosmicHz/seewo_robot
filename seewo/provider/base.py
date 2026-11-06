@@ -202,7 +202,10 @@ class Provider(abc.ABC):
         """撤回消息。平台不支持时抛 `CapabilityError`（不静默忽略）。"""
         if not self.capabilities.supports_recall:
             raise CapabilityError("supports_recall", f"平台 {self.platform} 不支持撤回")
-        return False
+        # 申报了能力却没覆写：这是 Provider 实现缺陷，不能静默返回「撤回失败」
+        raise NotImplementedError(
+            f"{type(self).__name__} 申报 supports_recall=True 但未实现 recall()"
+        )
 
     def history(
         self, conversation_id: str = "", before: str | None = None, limit: int = 50
@@ -212,7 +215,10 @@ class Provider(abc.ABC):
             raise CapabilityError(
                 "supports_history", f"平台 {self.platform} 不支持拉取历史"
             )
-        return ()
+        # 申报了能力却没覆写：不能返回空元组冒充「历史为空」
+        raise NotImplementedError(
+            f"{type(self).__name__} 申报 supports_history=True 但未实现 history()"
+        )
 
 
 class CallbackProvider(Provider):
