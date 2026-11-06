@@ -6,6 +6,8 @@
 
 希沃云班「亲情留言」聊天机器人。通过「希沃统一服务平台」API，以家长身份收发留言、执行命令、上传媒体、查询考勤。所有外部请求的目标服务器是希沃生产服务（`m-campus.seewo.com` / `campus.seewo.com` / `id.seewo.com`），可在 `config.json` 切到本地 mock 服务器调试。
 
+**v2 架构目标**（2026-11 起）：在保留原有两条路径的前提下，建立一个**业务与协议充分解耦**、拥有稳定扩展接口、能接入主流聊天机器人生态的**通用消息服务**。核心在 `seewo/` 包，见 [分层架构](#通用消息服务架构seewo-包)。
+
 ## 快速开始（拿到代码后）
 
 ```bash
@@ -110,17 +112,86 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 基础设施 (init.py / login.py / funcs.py)  ← 配置、登录、文件读写工具
 ```
 
+> 上图是**路径 B 的 v1 现状**。v2 的通用消息服务内核在 `seewo/` 包，是**并行的另一套**（v1 端点行为不变）。见下节。
+
+## 通用消息服务架构（`seewo/` 包）
+
+### 分层与依赖方向
+
+依赖**严格单向向下**，上层可调下层，下层**不得**反向 import 上层：
+
+```text
+┌──────────────────────────────────────────────────────────┐
+│ interfaces/    对外 HTTP 接口（REST v2 / OneBot / Satori）│
+├──────────────────────────────────────────────────────────┤
+│ integrations/  第三方框架协议适配（OneBot 11 / Satori）   │
+├──────────────────────────────────────────────────────────┤
+│ core/          通用业务：去重/排序/游标/并发/状态/事件    │
+├──────────────────────────────────────────────────────────┤
+│ provider/      平台接入契约（抽象基类，无平台专有符号）  │
+├──────────────────────────────────────────────────────────┤
+│ providers/     具体平台实现（目前仅 seewo）               │
+├──────────────────────────────────────────────────────────┤
+│ models/ errors/  平台中立模型 + 异常体系（纯标准库）      │
+└──────────────────────────────────────────────────────────┘
+```
+
+**唯一例外**：`seewo/providers/seewo.py` 被允许 import 仓库根的希沃协议层（`api`/`login`/`msg`/`stu`/`upload`）—— 复用既有协议实现，**刻意选择，非破例**。
+
+### 关键不变量（改代码时不要破坏）
+
+1. `models.py` / `errors.py` **只依赖标准库**
+2. 依赖方向只能向下（`interfaces` → `integrations` → `core` → `provider` → `models`）
+3. 只有 `providers/seewo.py` 可 import 希沃协议层
+4. **`Provider.send()` 是模板方法**：能力闸门（`ensure_can_send` + `ensure_text_length`）在里面强制生效，子类只实现 `_send()`。**不要覆写 `send()`** —— 那会绕过闸门
+5. 平台没有的能力 → `capabilities` 申报 `False` + 抛 `CapabilityError`，**不伪造、不静默**
+6. 事件派发必须串行（`_dispatch_lock`），保证事件序 == 消息序
+7. v1 `/api/*` 响应格式与行为**保持不变**
+8. `chat_history.json` 旧格式继续可读
+
+### 架构守卫（自动化）
+
+`tests/test_layering.py` 用 AST 解析 import，把上述约定变成**可执行的检查**：依赖方向、平台专有模块隔离、无逆向依赖、无 TODO 残留、文件数 ≤ 30（防过度设计）。**改依赖结构时这个文件会告诉你哪里越界了。**
+
+### 各模块职责（`seewo/`）
+
+| 模块 | 职责 | 关键点 |
+| --- | --- | --- |
+| `models.py` | 平台中立模型 | `Segment`（`type` 判别 + 扁平字段）、`Message`（`sort_key` = `(timestamp, id)`）、`User`/`Conversation`/`Event`/`PlatformCapabilities`/`ConnectionState`（显式跃迁表）。平台细节只能进 `Segment.data` / `Message.native` |
+| `errors.py` | 异常体系 | 平台错误码在 Provider 边界被翻译成中立语义（认证失效/业务拒绝/连接失败/超时）。`CapabilityError.capability` 指出具体是哪个能力字段不满足 |
+| `provider/base.py` | Provider 契约 | 平台接入的**唯一**扩展点。`poll(cursor, limit)` 游标语义由 Provider 自己定义（希沃用页码，Satori 用 `sn`）。`CallbackProvider` 供推送式平台 |
+| `core/store.py` | 持久化 | `Store` ABC / `MemoryStore` / `JsonStore`。`JsonStore` 沿用旧 `{"messages":[...]}` 格式；原子写（`mkstemp` + `os.replace`）；缺 `messages` 键抛 `CorruptStoreError`（**故意不吞**） |
+| `core/service.py` | 通用业务中枢 | 双层去重（LRU + Store）、复合排序键、游标持久化、`_ingest_lock` 串行化拉取、`_dispatch_lock` 串行化派发、认证自愈（刷新后**重试恰好一次**） |
+| `providers/seewo.py` | 希沃适配 | **唯一**允许出现希沃专有符号的地方。数字 type → `SegmentType`；业务码 → Provider 异常；游标 = 1-based 页码；媒体先上传拿 `downloadUrl` |
+| `integrations/base.py` | 集成基础设施 | `translate_event` / `build_payload`（钩子）/ `broadcast` / `send_payload` / `backoff_delay` / `resume_cursor` / `deliver` |
+| `integrations/onebot11/` | OneBot 11 | HTTP `POST /onebot/v11/<action>` + 正向 WS `/onebot/v11/ws`。retcode：OK=0 / UNSUPPORTED=100 / ILLEGAL_PARAM=1400 / AUTH=1401 |
+| `integrations/satori/` | Satori | WS `/v1/events` + HTTP `POST /satori/v1/<resource>.<method>`。opcode：EVENT=0 / PING=1 / PONG=2 / IDENTIFY=3 / READY=4 |
+| `interfaces/rest.py` | REST v2 | 统一信封 `{"status","data"|"error"}`；`ApiErrorCode` ↔ HTTP 状态码一一对应（capability→**501**、upstream→502、timeout→504）；`map_exception()` 是错误契约的唯一入口 |
+| `interfaces/openapi.yaml` | 接口描述 | OpenAPI 3.1 |
+| `sdk.py` | 类型化 SDK | `SeewoRobotClient` + `SeewoApiError` + `SendResult`。**只收 URL，不代劳上传** |
+| `testing/fake_provider.py` | 测试替身 | `FakeProvider` 实现了完整 Provider 契约，**at-least-once** 游标语义（用旧游标会重投），可跑全部离线测试 |
+
+### 扩展指引
+
+**接新协议** → 实现 `IntegrationServer` 子类（`translate_event` + `send_payload`），加一个 Server 注册 HTTP/WS 路由。免费获得广播、退避、续传、事件订阅。
+
+**接新平台** → 实现 `Provider` 子类（`poll` + `_send` + `capabilities`）。核心层、接口层、集成层**零改动**。
+
+**加新能力** → 先确认平台**真的支持**（翻文档或真机验证），再改 `Provider.capabilities`；涉及新段类型时 `models.py` 三处要同步（`SegmentType` / `supports_segment()` / `CAPABILITY_FIELD_BY_SEGMENT`）。
+
+**协议细节** → 只在 `providers/seewo.py` 改；上层不认识 `resUrl` / 数字 type / `statusCode`。
+
 ### 各层职责（关键）
 
 - **[request_manager.py](request_manager.py)**：所有对希沃的 HTTP 请求**必须**经此调度。当前实现 `_throttle()` 全局节流（`MIN_INTERVAL=0.5s`，`threading.Lock` 串行化节流点）+ HTTP 429 指数退避重试（3 次）。预留队列化接口（`queue.Queue + worker`，当前同步执行）。**新增任何对希沃的 `requests.post` 都必须改用 `request_manager.post`**。
 - **[api.py](api.py)**：m-campus API 调用网关。`api().action(type, params, account)` 把 pxencode 后的参数 POST 到 `/class/apis.json?action=<type>`，返回响应 JSON。内部已用 `request_manager.post`。
 - **[msg.py](msg.py)**：纯 DAO。只做单次请求，**不再有**多页聚合逻辑。`get(count, start=1) -> MessageResponse` 是核心方法，`start` 是 1-based 页码（start=1=最新一页，递增往更旧翻页，页内按 id 升序，页间无重叠）；调用方通过 `.result` 取 `tuple[RawMessage, ...]`。
-- **[message_service.py](message_service.py)**：消息数据源层。`MessageDataSource` 独占 `chat_history.json` 读写、消息格式化、内存缓存（基于文件 mtime 感知 `main.py` 等外部写入）。`_format_msg(raw: RawMessage) -> Message`；`_messages: list[Message]`；对外方法返回 dict（边界 `dataclasses.asdict` 转 dict 给 jsonify）。`sync_all` 翻页循环在本层。
+- **[message_service.py](message_service.py)**：消息数据源层。`MessageDataSource` 独占 `chat_history.json` 读写、消息格式化、内存缓存（基于文件 mtime + 大小感知 `main.py` 等外部写入）。公开接口：`fetch_latest()` / `load_local()` / `local_bounds()` / `persist(raw_messages)`；`_format_msg`、`_messages` 为内部实现，**外部与测试都不应触碰**。对外方法返回 dict（边界 `dataclasses.asdict` 转 dict 给 jsonify）。`sync_all` 翻页循环在本层。
 - **[models.py](models.py)**：数据模型层。进程内数据传输用 dataclass，跨进程边界（Flask jsonify / 写 chat_history.json / pxencode 网络请求）调 `dataclasses.asdict()` 转换。含 `Config` 配置模型（可变，供 `reload_config` 原地更新实现热重载）。详见 [数据模型层（models.py）](#数据模型层modelspy)。
 - **[api_server.py](api_server.py)**：入口层，handler 薄层化。全局 `session = Session()` + 全局 `datasource = MessageDataSource(session)`（构造时仅 `_refresh` 读 mtime，不碰 session）。
 - **[init.py](init.py)**：全局配置 `config`（`models.Config` dataclass，可变）、`reload_config()`（重读 config.json 原地更新以支持热重载）、文件路径、`_use_mock`、公共请求头 `headers_nocookie`、希沃 URL 集合 `urls`、统一本地时区 `LOCAL_TZ`（北京时间；所有业务时间格式化/考勤取数用它，勿用系统本地时区）。所有状态文件路径（`config.json`/`tokens.json`/`uploads.json`/`qrcode.png`）由 `project_path()` 基于 `__file__` 锚定到项目根目录，不依赖进程当前工作目录。
 - **[login.py](login.py)**：`acc` 账户对象 + `download_qrcode` / `check_qrcode` / `login` 流程。`acc(auto_login=True/False)` 控制过期时是否自动触发扫码：`main.py` 用 True，`api_server.py` 用 False。
-- **[stu.py](stu.py)**：学生信息 DAO，不传 `child_uid` 时默认取关联列表第一个学生；按 `child_uid`（userUid）稳定标识选取，不再支持按下标选取（列表顺序不受服务端保证）
+- **[stu.py](stu.py)**：学生信息 DAO。不传 `child_uid` 时默认取关联列表第一个学生；按 `child_uid`（userUid）稳定标识选取，**生产代码请用 `child_uid`**（列表顺序不受服务端保证）；`count`（按下标选取）仍保留但已不推荐，与 `child_uid` 同时传入时 `child_uid` 优先并警告
 - **[funcs.py](funcs.py)**：工具函数。`chat_log_file()` 每次调用即时按 `config.use_mock` 返回 `chat_history_mock.json` / `chat_history.json` 路径（**不要缓存成模块常量**，配置读后即过期）。`load_chat_history() -> list[Message]`、`append_message` / `merge_messages(messages: list[Message])` 只维护 `messages` 字段，不维护 `earliest_id` / `last_id`；`merge_messages` **不去重**（同 id 重复传入会重复落盘，调用方自行保证）。
 - **[upload.py](upload.py)**：文件上传的唯一实现 `upload_file(account, file, type=None) -> downloadUrl`（`main.py` / `upload_file.py` / `api_server.py` 都调它，不要各自重复封装）。`type=None` 时按扩展名用 stdlib `mimetypes` 推导 Content-Type（显式传入的值优先）；上传失败时 `downloadUrl` 保持空串、失败原因在 `error`。
 - **[yunban.py](yunban.py)**：云班功能扩展（班级列表、考勤事件、签到等）。多数方法走独立的 campus 云班 REST 端点（`/api/classmember` / `kidnote` / `attendance`），**直接 `requests.request`，绕过 `request_manager`**（无统一节流，调用方需自行控制频率）。各 get 函数返回数据模型（`YunbanClass` 等）。`getpass` 获取离线验证码、`getpass2` 监听剪贴板（依赖 `pyperclip`）。
@@ -146,6 +217,31 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 | `/api/login/status` | GET | — | 查询扫码状态（`idle` / `pending` / `ok` / `error`） |
 
 > 路径 B **不提供命令执行接口**：原 `/api/execute` 已移除（任意命令执行不再经 HTTP 暴露）。以 `/` 开头的留言仅在路径 A（`main.py`）里被解释为命令。
+
+## v2 与协议端点（与 v1 并存）
+
+v1 的 `/api/*` **行为不变**；下表全部是**新增**端点，与 v1 共用同一个 `MessageService` 实例与同一个端口。
+
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/api/v2/status` | GET | 平台、连接状态、**能力表**、会话信息 |
+| `/api/v2/capabilities` | GET | 平台能力声明（`PlatformCapabilities.to_dict()`） |
+| `/api/v2/messages` | GET | 实时拉取（`count` ≤ 200）。走核心层 → **落库并去重** |
+| `/api/v2/messages` | POST | 发送。body `{"segments": [...]}` 或简写 `{"content": "..."}` |
+| `/api/v2/history` | GET | 本地历史（`limit` ≤ 500 / `offset`），返回 `total` |
+| `/api/v2/sync` | POST | 触发一次拉取并接收，返回 `count` |
+| `/api/v2/events` | GET | **SSE 事件流**（平台中立） |
+| `/api/v2/connection` | POST | `{"action": "connect"\|"disconnect"}` |
+| `/onebot/v11/<action>` | POST | OneBot 11 HTTP API |
+| `/onebot/v11/get_status` | GET | OneBot 11 状态 |
+| `/onebot/v11/ws` | GET | OneBot 11 正向 WebSocket |
+| `/satori/v1/<action>` | POST | Satori HTTP API（`{resource}.{method}`） |
+| `/<platform>/<account>/satori/v1/<action>` | POST | Satori HTTP API（带前缀形式） |
+| `/v1/events` | GET | Satori 事件 WebSocket |
+
+v2 响应信封与错误码见 [docs/MIGRATION.md](docs/MIGRATION.md)；协议细节见 [docs/INTEGRATION.md](docs/INTEGRATION.md)。
+
+> **挂载位置**：`api_server.py` 末尾用 `flask_sock.Sock(app)` 把两个 WS 端点挂到**同一个** Flask app（flask-sock 以蓝图方式注册路由），因此 HTTP 与 WS 共用 `api_port`。`tests/test_protocol_endpoints.py` 校验所有端点真的挂上了 —— 防「适配器写好了但 WS 端点从未 attach」这类回归。
 
 ## 核心数据约定
 
@@ -201,7 +297,7 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 
 - `funcs.load_chat_history() -> list[Message]`、`append_message` / `merge_messages` 内部构造 Message 实例
 - `msg.get(count, start) -> MessageResponse`、辅助方法 `get_id` / `get_all_ids` / `get_content_by_index` / `get_msg_detail` 用属性访问（`.result` / `m.id` / `m.content`）
-- `message_service._format_msg(raw: RawMessage) -> Message`、`_messages: list[Message]`、对外方法返回 dict（边界 `dataclasses.asdict(m)` 转 dict 给 jsonify）
+- `message_service._format_msg(raw: RawMessage) -> Message`（内部）、`_messages: list[Message]`（内部缓存）、公开接口 `fetch_latest()` / `load_local()` / `local_bounds()` / `persist(raw_messages)`、对外方法返回 dict（边界 `dataclasses.asdict(m)` 转 dict 给 jsonify）
 - `main.py` 字段访问从 `.get("x", default)` 改为 `.x`（运行时行为不变，AGENTS.md 硬约束已放宽至此）
 - `yunban.py` 各 get 函数返回云班模型（`Yunban*`），`searchstubyname`/`searchstubyuid` 未命中返回 `None`（原为 `{}`）
 
@@ -391,6 +487,32 @@ def xxx():
 
 - [test/test_api.py](test/test_api.py)：逐个测试所有 API 端点，发送/图片/音频会跳过避免误发。
 
+### 自动化用例（`tests/`，全程离线）
+
+用 `uv run pytest`。用例分三层：
+
+| 文件 | 覆盖 |
+| --- | --- |
+| `test_api_*.py` / `test_upload.py` / `test_mock_*.py` 等 | v1 既有端点（**回归基线**，勿改语义） |
+| `test_models_v2.py` | 平台中立模型、能力表、状态机跃迁表、异常体系 |
+| `test_core_service.py` | 去重 / 排序 / 游标恢复 / **并发** / 状态一致性 / 错误传播 / 认证自愈 / 能力缺口 |
+| `test_integrations.py` | OneBot 11 与 Satori 的事件形状、API 动作、共享集成设施 |
+| `test_rest_v2.py` | v2 端点、统一信封、错误码映射、**SDK 契约** |
+| `test_provider_contract.py` | **同一套断言**跑在 `FakeProvider` 与真实 `SeewoProvider` 上 —— 平台契约不靠自觉 |
+| `test_message_service.py` | v1 数据源层：格式化、缓存感知、批量落盘 —— **一律走公开接口**（`fetch_latest` / `load_local` / `persist`），不碰私有成员 |
+| `test_layering.py` | **架构守卫**：依赖方向、平台专有模块隔离、无逆向依赖、无 TODO、文件数上限 |
+| `test_protocol_endpoints.py` | 协议端点**真的挂上了**（含两个 WS 路由） |
+
+**写测试的纪律**：
+
+- 断言要落在**公开契约**上，不要把当前实现的偶然细节固化成预期。改实现前先确认断言的是需求而非实现。
+- **不要触碰私有成员**（`_messages` / `_refresh` 这类下划线开头的东西）。用公开方法观察行为。既有 `test_message_service.py` 曾有这个毛病，已按 [docs/TEST_REVIEW.md](docs/TEST_REVIEW.md) 的审查结论整改为公开路径断言，**新增测试不要重复该模式**。
+- 能力相关的用例要写**正反两面**：能力可用时行为正确 + 能力不可用时抛 `CapabilityError`（而不是静默成功或静默失败）。
+- **不要用 `pytest.raises(Exception)`** —— 盲捕异常，任何异常都能通过。要断言具体异常类型，必要时连异常属性一起断言（如 `exc.value.capability`）。
+- 协议适配层用 `FakeProvider` 测试，**不连真实希沃**。
+- 契约测试（`test_provider_contract.py`）新增断言时，要同时对 `FakeProvider` 和 `SeewoProvider` 成立。
+- 断言要有约束力：检查过 `continue` 之后的 `assert` 是否真的可达，别留下空断言。
+
 ### 日志
 
 - `api_server.py` 启动时按 `config.json:log_level` 配置 `logging.basicConfig`，所有模块用 `logging.getLogger("seewo.xxx")`。
@@ -447,8 +569,9 @@ def xxx():
 
 ### 修改 MessageDataSource 的注意事项
 
-- `_refresh` 通过 mtime 感知外部写入（main.py 的 append_message）。**写操作后必须调 `_invalidate` 失效缓存**，否则下次 `_refresh` 不会重读。
-- `_persist` 已封装：格式化 + merge + invalidate + refresh。
+- `_refresh` 通过 mtime **与文件大小**感知外部写入（main.py 的 append_message）。**写操作后必须调 `_invalidate` 失效缓存**，否则下次 `_refresh` 不会重读。
+  - 已知边界：mtime 与大小都相同但内容变了（同秒内等长覆写）仍会漏判 —— 彻底解决需要文件锁或版本号。当前不宣称覆盖此情形。
+- `persist(raw_messages)` 是公开方法，已封装：格式化 + merge + invalidate + refresh。测试与外部调用方都应走它，不要直接调私有的 `_format_msg`。
 - 不要在 datasource 里直接调 `session.stu_msg.send`。这是数据源层，不是发送层。
 - `sync_all(delay)` 的 `delay` 是同步流程自身额外增加的等待（防风控）；请求层自身的节流（`request_manager.MIN_INTERVAL`）独立叠加，不再与该常量比较。
 
@@ -458,8 +581,11 @@ def xxx():
 - [yunban.py](yunban.py) 的所有请求**直接 `requests.request`，绕过 `request_manager`**：无统一节流 / 429 退避。批量取出全部班级、逐班取学生、批量签到等高频场景需调用方自行 `time.sleep` 防风控（503/504）。
 - **聊天记录损坏 = 启动即失败（已修，故意不吞异常）**：`funcs.load_chat_history()` 遇到「文件存在但无法解析」会抛 `CorruptChatHistoryError`，让服务启动时立刻崩掉。原因：读容错（返回 `[]`）+ [append_message](funcs.py) 的「读 → 追加 → 全量覆盖」会把损坏当空记录，一次追加就把全部历史覆盖成 1 条新消息（已实测复现）。恢复方式：修复或删除损坏文件后重启，再用 `sync_all` 重新拉取全量。
 - **upload policy 字段位置已按生产实测对齐（已结）**：生产实测（一次只读策略请求，不上传文件）确认 `expireSeconds` 在响应的 `data` 层，`policyList[0]` 含 `uploadUrl/headerFields/priority/type/formFields`。[mock_server.py](mock_server.py) 已按此修正，`tests/test_upload.py::test_mock_server_policy_matches_client_expectations` 已解除 skip
-- **上游错误处理尚未体系化**：已完成「请求超时（`request_manager.TIMEOUT`）」「状态码语义统一到 `models.SeewoCode` / `SeewoQrCode` + `SendResult` 分存 `seewo_code`/`http_status`」「`-500/-505` 刷新会话后重发一次」「媒体端点不再吞掉发送失败」「`Upload` 策略失败降级」「上传实现合并为 `upload.upload_file` 单一入口」。仍待计划：`login.py` 的 4 处裸 `requests.get` 无超时；`msg.send` / handler 用 `print`/无日志，失败不可观测；错误类型未建模为异常体系（DAO 层返回结果对象而非抛异常）
+- **上游错误处理尚未体系化（v1 侧）**：已完成「请求超时（`request_manager.TIMEOUT`）」「状态码语义统一到 `models.SeewoCode` / `SeewoQrCode` + `SendResult` 分存 `seewo_code`/`http_status`」「`-500/-505` 刷新会话后重发一次」「媒体端点不再吞掉发送失败」「`Upload` 策略失败降级」「上传实现合并为 `upload.upload_file` 单一入口」「`login.py` 的 4 处裸 `requests.get` 加 `timeout=15`」「`msg.py` 的 `print` 改为 `logging`」。v2 侧已完整建模为异常体系（`seewo/errors.py`）。v1 侧 DAO 层仍返回结果对象而非抛异常。
 - **ruff BLE001（盲捕 Exception）暂时全局忽略**：约 38 处 `except Exception`（api_server handler / TUI 事件兜底 / main 重连循环）需按调用点逐个收窄，属「上游错误处理体系化」的一部分；完成收窄后删除 [pyproject.toml](pyproject.toml) `[tool.ruff.lint]` 中的 `ignore = ["BLE001"]`
+- **OneBot 11 / Satori 协议端点无鉴权**：`config.json` 的 `api_key` 只保护 v1/v2 REST。OneBot 11 的 HTTP（`/onebot/v11/*`）与 WS（`/onebot/v11/ws`）端点**不做任何凭据校验**；Satori 只有 WS 层的 `IDENTIFY.token` 校验，HTTP API 无校验。生产部署需用反向代理或网络隔离。
+- **WebSocket 端点依赖 Werkzeug 开发服务器**：`flask-sock` 在 `app.run()` 下正常；生产部署需换成支持 WS 的 WSGI 服务器（如 gunicorn + gevent），否则 WS 握手失败（HTTP 端点不受影响）。
+- **希沃协议能力缺口（非待办，是协议限制）**：撤回 / 提及 / 引用 / 视频与文件发送 / 流式推送均未实现。协议层不具备或**未经验证**，不猜测行为。完整清单见 [docs/CAPABILITIES.md](docs/CAPABILITIES.md)。
 
 ## 数据文件清单
 
@@ -496,4 +622,8 @@ def xxx():
 ## 进一步参考
 
 - [README.md](README.md) — 用户向使用文档
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — `seewo/` 分层、依赖方向、数据流、不变量清单
+- [docs/INTEGRATION.md](docs/INTEGRATION.md) — OneBot 11 / Satori 接入实操、自写适配器指南
+- [docs/MIGRATION.md](docs/MIGRATION.md) — v1 → v2 迁移指南、兼容性保证
+- [docs/CAPABILITIES.md](docs/CAPABILITIES.md) — 能力声明与已知能力缺口
 - [test/test_api.py](test/test_api.py) — API 端点逐个测试脚本

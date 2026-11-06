@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "flask==3.1.2",
+    "flask-sock==0.7.0",
     "pillow==12.3.0",
     "pyperclip==1.11.0",
     "requests==2.34.2",
@@ -39,5 +40,5 @@ pythonpath = ["."]
 ignore = ["BLE001"]
 
 [tool.setuptools.packages.find]
-include = ["seewo_robot*"]
-exclude = ["tmp", "logs"]
+include = ["seewo*"]
+exclude = ["tmp", "logs", "tests*", "test*"]

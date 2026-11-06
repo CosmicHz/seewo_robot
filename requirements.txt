@@ -7,7 +7,13 @@ charset-normalizer==3.5.2
 click==8.5.0
     # via flask
 flask==3.1.2
+    # via
+    #   flask-sock
+    #   seewo-robot (pyproject.toml)
+flask-sock==0.7.0
     # via seewo-robot (pyproject.toml)
+h11==0.16.0
+    # via wsproto
 idna==3.20
     # via requests
 itsdangerous==2.2.0
@@ -48,6 +54,8 @@ requests-toolbelt==1.0.0
     # via seewo-robot (pyproject.toml)
 rich==15.0.0
     # via textual
+simple-websocket==1.1.0
+    # via flask-sock
 sortedcontainers==2.4.0
     # via seewo-robot (pyproject.toml)
 textual==8.2.8
@@ -60,3 +68,5 @@ urllib3==2.8.0
     # via requests
 werkzeug==3.1.9
     # via flask
+wsproto==1.3.2
+    # via simple-websocket

@@ -27,14 +27,26 @@ def _ds_with(pages=None, get_impl=None):
 
 
 class TestFormatMsg:
+    """格式化规则。
+
+    走**公开路径** `fetch_latest()`（真实调用方 `/api/messages` 用的就是它），
+    而不是直接调私有的 `_format_msg` —— 格式化规则是需求，
+    但「格式化发生在哪个方法里」是实现细节。
+    """
+
     @pytest.fixture
     def source(self, chat_file):
-        return MessageDataSource(FakeSession())
+        """(数据源, 会话) —— 会话用于预置上游返回的原始消息。"""
+        session = FakeSession()
+        return MessageDataSource(session), session
 
     def _fmt(self, source, raw):
-        return source._format_msg(
-            raw, "mock_parent_001", "mock_student_001", "测试学生"
-        )
+        """喂一条原始消息进公开读接口，返回格式化后的那条。"""
+        ds, session = source
+        session.stu_msg.pages = {1: [raw]}
+        messages = ds.fetch_latest(10)["messages"]
+        assert len(messages) == 1
+        return messages[0]
 
     def test_parent_sender(self, source):
         m = self._fmt(
@@ -43,7 +55,7 @@ class TestFormatMsg:
                 1, senderUid="mock_parent_001", senderType="parent", senderName="某人"
             ),
         )
-        assert (m.sender, m.senderName) == ("parent", "家长")
+        assert (m["sender"], m["senderName"]) == ("parent", "家长")
 
     def test_student_sender_uses_student_name(self, source):
         m = self._fmt(
@@ -52,7 +64,7 @@ class TestFormatMsg:
                 1, senderUid="mock_student_001", senderType="student", senderName="忽略"
             ),
         )
-        assert (m.sender, m.senderName) == ("student", "测试学生")
+        assert (m["sender"], m["senderName"]) == ("student", "测试学生")
 
     def test_unknown_sender_keeps_server_name(self, source):
         m = self._fmt(
@@ -61,14 +73,14 @@ class TestFormatMsg:
                 1, senderUid="teacher_1", senderType="teacher", senderName="王老师"
             ),
         )
-        assert (m.sender, m.senderName) == ("unknown", "王老师")
+        assert (m["sender"], m["senderName"]) == ("unknown", "王老师")
 
     def test_unknown_sender_without_name_falls_back(self, source):
         m = self._fmt(
             source,
             raw_msg(1, senderUid="teacher_1", senderType="teacher", senderName=""),
         )
-        assert m.senderName == "未知"
+        assert m["senderName"] == "未知"
 
     def test_millisecond_timestamp_formatted(self, source):
         from datetime import datetime
@@ -76,52 +88,55 @@ class TestFormatMsg:
         from init import LOCAL_TZ
 
         m = self._fmt(source, raw_msg(1, createTime=1700000000000))
-        assert m.time == datetime.fromtimestamp(1700000000, tz=LOCAL_TZ).strftime(
+        assert m["time"] == datetime.fromtimestamp(1700000000, tz=LOCAL_TZ).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
 
     def test_zero_timestamp_becomes_blank(self, source):
-        assert self._fmt(source, raw_msg(1, createTime=0)).time == ""
+        assert self._fmt(source, raw_msg(1, createTime=0))["time"] == ""
 
     def test_passes_through_content_type_and_url(self, source):
         m = self._fmt(source, raw_msg(1, type=2, content="", resUrl="http://cdn/a.png"))
-        assert (m.type, m.resUrl, m.content) == (2, "http://cdn/a.png", "")
+        assert (m["type"], m["resUrl"], m["content"]) == (2, "http://cdn/a.png", "")
 
 
 # ============================ 缓存与 mtime 感知 ============================
 
 
 class TestRefresh:
+    """缓存行为。
+
+    断言一律通过**公开读接口**（`load_local()` / `local_bounds()`）观察，
+    不触碰 `_messages` / `_refresh` 等私有成员 —— 缓存用什么结构存、
+    怎么判断失效都是实现选择，需求只要求「读到的数据是对的」。
+    """
+
     def test_missing_file_yields_empty_cache(self, ds):
-        assert list(ds._messages) == []
+        assert ds.load_local()["messages"] == []
 
     def test_reads_existing_file(self, chat_file):
         write_chat_history(chat_file, [msg_obj(1), msg_obj(2)])
-        assert [m.id for m in MessageDataSource(FakeSession())._messages] == [1, 2]
+        ds = MessageDataSource(FakeSession())
+        assert [m["id"] for m in ds.load_local()["messages"]] == [1, 2]
 
     def test_reloads_when_file_changes_externally(self, chat_file):
-        """感知 main.py 等外部进程对 chat_history.json 的追加写入"""
+        """感知 main.py 等外部进程对 chat_history.json 的追加写入。
+
+        走**公开读接口**的自动感知路径（不手动调 `_refresh()`）——
+        这才是真实调用方（接口层）的路径。
+        """
         ds = MessageDataSource(FakeSession())
-        assert list(ds._messages) == []
+        assert ds.load_local()["messages"] == []
+
         write_chat_history(chat_file, [msg_obj(1)])
-        assert [m.id for m in ds._messages] == []  # 未 _refresh 前仍是旧缓存
+        assert [m["id"] for m in ds.load_local()["messages"]] == [1]
 
-        ds._refresh()
-        assert [m.id for m in ds._messages] == [1]
+    def test_reuses_cache_when_file_unchanged(self, chat_file, monkeypatch):
+        """文件没变时不该重复读盘。
 
-    def test_reuses_cache_when_mtime_unchanged(self, chat_file, monkeypatch):
-        write_chat_history(chat_file, [msg_obj(1)])
-        calls = []
-        original = ms_module.load_chat_history
-        monkeypatch.setattr(
-            ms_module, "load_chat_history", lambda: (calls.append(1), original())[1]
-        )
-        ds = MessageDataSource(FakeSession())
-        ds._refresh()
-        ds._refresh()
-        assert len(calls) == 1
-
-    def test_invalidate_forces_reload(self, chat_file, monkeypatch):
+        断言的是**效果**（底层读盘次数不增加），不是「某个特定函数
+        没被调用」—— 后者会把缓存策略的实现细节固化成需求。
+        """
         write_chat_history(chat_file, [msg_obj(1)])
         calls = []
         original = ms_module.load_chat_history
@@ -129,43 +144,66 @@ class TestRefresh:
             ms_module, "load_chat_history", lambda: (calls.append(1), original())[1]
         )
         ds = MessageDataSource(FakeSession())
-        ds._invalidate()
-        ds._refresh()
-        assert len(calls) == 2
+        ds.load_local()
+        first = len(calls)
+        ds.load_local()
+        ds.load_local()
+        assert len(calls) == first
+
+    def test_write_invalidates_cache(self, chat_file, monkeypatch):
+        """写操作后缓存必须失效，否则下次读拿到旧数据。"""
+        write_chat_history(chat_file, [msg_obj(1)])
+        calls = []
+        original = ms_module.load_chat_history
+        monkeypatch.setattr(
+            ms_module, "load_chat_history", lambda: (calls.append(1), original())[1]
+        )
+        ds = MessageDataSource(FakeSession())
+        ds.load_local()
+        before = len(calls)
+
+        ds.persist([raw_msg(2)])
+        ds.load_local()
+        assert len(calls) > before
 
     def test_file_disappearing_resets_cache(self, chat_file, ds):
         write_chat_history(chat_file, [msg_obj(1)])
-        ds._refresh()
-        assert len(ds._messages) == 1
+        assert len(ds.load_local()["messages"]) == 1
         chat_file.unlink()
-        ds._refresh()
-        assert list(ds._messages) == []
+        assert ds.load_local()["messages"] == []
 
 
 # ============================ 持久化 ============================
 
 
 class TestPersist:
+    """落盘行为。
+
+    `persist` 是「格式化 + 写盘 + 合并」的完整语义，
+    因此这里断言**可观察的结果**（文件内容、公开读接口的返回），
+    而不是缓存容器的内部状态。
+    """
+
     def test_formats_and_writes_to_disk(self, ds, chat_file):
-        formatted = ds._persist([raw_msg(1), raw_msg(2)])
-        assert [m.id for m in formatted] == [1, 2]
+        ds.persist([raw_msg(1), raw_msg(2)])
         stored = json.loads(chat_file.read_text(encoding="utf-8"))["messages"]
         assert [m["id"] for m in stored] == [1, 2]
         assert stored[0]["sender"] == "student"
         assert stored[0]["senderName"] == "测试学生"
 
     def test_empty_input_is_noop(self, ds, chat_file):
-        assert ds._persist([]) == []
+        assert ds.persist([]) == []
         assert not chat_file.exists()
 
-    def test_cache_is_up_to_date_after_persist(self, ds):
-        ds._persist([raw_msg(3)])
-        assert [m.id for m in ds._messages] == [3]
+    def test_persisted_message_is_readable_back(self, ds):
+        """写入后能通过公开读接口读回来 —— 落盘与读取是闭环"""
+        ds.persist([raw_msg(3)])
+        assert [m["id"] for m in ds.load_local()["messages"]] == [3]
 
     def test_merges_with_existing_without_losing(self, ds, chat_file):
         write_chat_history(chat_file, [msg_obj(5)])
-        ds._persist([raw_msg(7)])
-        assert [m.id for m in ds._messages] == [5, 7]
+        ds.persist([raw_msg(7)])
+        assert [m["id"] for m in ds.load_local()["messages"]] == [5, 7]
 
 
 # ============================ 对外方法 ============================
@@ -268,7 +306,7 @@ class TestSyncAll:
         assert result["status"] == "ok"
         assert result["synced_count"] == 21
         assert result["total_count"] == 21
-        assert [m.id for m in ds._messages] == list(range(80, 101))
+        assert [m["id"] for m in ds.load_local()["messages"]] == list(range(80, 101))
         assert [call[1] for call in session.stu_msg.get_calls] == [1, 1, 2, 3]
 
     def test_stops_when_page_older_than_local_and_not_full(self, chat_file):

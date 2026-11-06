@@ -1,4 +1,5 @@
 import json
+import logging
 import warnings
 
 import requests
@@ -9,6 +10,8 @@ from init import proxies, urls
 from login import acc
 from models import MessageResponse, RawMessage, SeewoCode, SendResult
 from stu import stu
+
+logger = logging.getLogger("seewo.msg")
 
 
 class msg:
@@ -105,14 +108,19 @@ class msg:
         result = SendResult.from_seewo_code(
             post.get("statusCode", 0), post.get("message", "")
         )
+        # 发送结果走 logging 而非 print：api_server 是常驻服务，
+        # print 的内容不进日志文件，失败在服务端不可观测。
         if result.ok:
-            print("发送成功：" + content)
+            logger.info("发送成功: %s", content)
         elif result.needs_relogin:
-            print(
-                f"发送失败：Token 无效或已过期（希沃码 {result.seewo_code}，见 models.SeewoCode）"
+            logger.warning(
+                "发送失败：Token 无效或已过期（希沃码 %s，见 models.SeewoCode）",
+                result.seewo_code,
             )
         else:
-            print(f"发送失败：{result.message or post}")
+            logger.error(
+                "发送失败（希沃码 %s）: %s", result.seewo_code, result.message or post
+            )
         return result
 
     def get_id(self, count: int) -> int:
@@ -146,11 +154,11 @@ class msg:
         post = api().action("DELETE_KIDNOTE_V1_NOTE", data, self.acc)
         code = post["statusCode"]
         if SeewoCode.is_invalid(code):
-            print("删除失败")
+            logger.warning("删除失败：Token 无效")
             return False
         elif SeewoCode.is_ok(code):
-            print("删除成功：")
+            logger.info("删除成功: id=%s", id)
             return True
         else:
-            print("unknown error:")
-            print(post)
+            logger.error("删除失败：未知错误 %s: %s", code, post)
+            return False

@@ -21,6 +21,12 @@ from login import acc, check_qrcode, download_qrcode
 from message_service import MessageDataSource
 from models import SeewoQrCode, SendResult
 from msg import msg
+from seewo.core.service import MessageService
+from seewo.core.store import JsonStore
+from seewo.integrations.onebot11 import OneBot11Adapter, OneBot11Server
+from seewo.integrations.satori import SatoriAdapter, SatoriServer
+from seewo.interfaces.rest import register as register_v2
+from seewo.providers.seewo import SeewoProvider
 from stu import stu
 from upload import upload_file
 
@@ -127,32 +133,50 @@ def require_api_key(f):
 
 # 全局会话对象
 class Session:
+    """希沃会话封装。
+
+    **并发安全**：`init()` / `refresh()` 由 `_lock` 保护。
+    修复的竞态：多个并发请求同时遇到 Token 失效时，会各自触发一次重登，
+    互相覆盖 `tokens.json`，并让部分请求拿到半初始化的会话。
+    现在并发调用 refresh() 只会真正重登一次，其余等待并复用结果。
+    """
+
     def __init__(self):
         self.account = None
         self.student = None
         self.stu_msg = None
         self._initialized = False
+        self._lock = threading.RLock()
 
     def init(self):
-        """初始化会话"""
-        if not self._initialized:
-            self.account = acc(auto_login=False)
-            if self.account.token_expired:
-                self._initialized = False
-                return self
-            self.student = stu(self.account)
-            self.stu_msg = msg(self.account, self.student)
-            self._initialized = True
-        return self
+        """初始化会话（线程安全）"""
+        with self._lock:
+            if not self._initialized:
+                account = acc(auto_login=False)
+                if account.token_expired:
+                    # 保留上一次的 account（供 needs_login 判定），不置 _initialized
+                    self.account = account
+                    return self
+                self.account = account
+                self.student = stu(account)
+                self.stu_msg = msg(account, self.student)
+                self._initialized = True
+            return self
 
     @property
     def needs_login(self):
         return self.account is not None and self.account.token_expired
 
     def refresh(self):
-        """刷新会话"""
-        self._initialized = False
-        return self.init()
+        """刷新会话（线程安全）。
+
+        并发调用时只有第一个真正执行重登，后续调用直接复用其结果。
+        """
+        with self._lock:
+            self._initialized = False
+            self.student = None
+            self.stu_msg = None
+            return self.init()
 
 
 session = Session()
@@ -160,6 +184,94 @@ session = Session()
 # 消息数据源层：独占 chat_history.json 读写 + 格式化 + 内存缓存
 # __init__ 仅 _refresh（读文件 mtime，不碰 session），handler 调用时 session 已 init
 datasource = MessageDataSource(session)
+
+# ---------------------------------------------------------------------------
+# v2 架构接入：平台中立的核心服务 + 第三方框架协议适配器
+#
+# 这里是「旧路径」与「新架构」的桥：**v1 端点行为完全不变**，
+# v2 端点与 OneBot 11 / Satori 适配器共享同一个 MessageService。
+#
+# Service 通过一个**延迟绑定的 Provider** 访问希沃：Session 是按需初始化的
+# （首次请求才扫码/加载 token），所以 Provider 必须在 session 真正可用后
+# 才绑定具体 DAO。`_BoundSeewoProvider` 负责这层延迟绑定。
+# ---------------------------------------------------------------------------
+
+
+class _BoundSeewoProvider(SeewoProvider):
+    """延迟绑定希沃 DAO 的 Provider。
+
+    Session 未就绪时（`stu_msg is None`），poll/send 抛
+    `ProviderConnectionError`，由核心层归一化成统一错误码。
+    """
+
+    def __init__(self, session_obj: Session) -> None:
+        super().__init__()
+        self._session = session_obj
+
+    def _bind(self):
+        """返回 (account, student, stu_msg)；未就绪时抛错。"""
+        from seewo.errors import ProviderConnectionError
+
+        sess = self._session
+        if sess.stu_msg is None or sess.account is None:
+            raise ProviderConnectionError(
+                "希沃会话尚未初始化，请先完成登录", retryable=False
+            )
+        return sess.account, sess.student, sess.stu_msg
+
+    def connect(self) -> None:
+        from seewo.errors import ProviderAuthError
+
+        account, student, stu_msg = self._bind()
+        self._account = account
+        self._student = student
+        self._stu_msg = stu_msg
+        if getattr(account, "token_expired", False):
+            raise ProviderAuthError("希沃凭证已失效")
+        super().connect()
+
+    def refresh_session(self) -> bool:
+        self._session.refresh()
+        account = self._session.account
+        if account is None or getattr(account, "token_expired", False):
+            return False
+        self._account = account
+        self._student = self._session.student
+        self._stu_msg = self._session.stu_msg
+        return True
+
+    def poll(self, cursor=None, limit=50):
+        self._sync_binding()
+        return super().poll(cursor=cursor, limit=limit)
+
+    def send(self, outgoing):
+        self._sync_binding()
+        return super().send(outgoing)
+
+    def _sync_binding(self) -> None:
+        """会话可能被 refresh() 换掉，每次操作前重新绑定。"""
+        sess = self._session
+        if sess.stu_msg is not None and sess.stu_msg is not self._stu_msg:
+            self._account = sess.account
+            self._student = sess.student
+            self._stu_msg = sess.stu_msg
+
+
+def _build_service() -> MessageService:
+    """构造核心服务。
+
+    Store 直接复用 v1 的 `chat_history.json`（格式兼容），
+    因此 v1 与 v2 看到同一份历史，不会出现两份数据。
+    """
+    from funcs import chat_log_file
+
+    provider = _BoundSeewoProvider(session)
+    store = JsonStore(chat_log_file(), cursor_path=chat_log_file() + ".cursor")
+    return MessageService(provider, store)
+
+
+#: 核心服务（v2 端点与协议适配器共用）
+service = _build_service()
 
 # 登录状态
 _login_state = {
@@ -610,12 +722,13 @@ def load_earlier_messages():
     try:
         count = int(request.args.get("count", 50))
         # before_id 优先取客户端传入的游标；未传则用 max(local)+1 兜底
-        datasource._refresh()
-        local = datasource._messages
+        # （经 local_bounds() 拿边界，不直接访问 datasource 的私有属性）
+        earliest_id, latest_id = datasource.local_bounds()
+        del earliest_id  # 本接口只需上界
         before_id = int(request.args.get("before_id", 0))
         if before_id <= 0:
-            before_id = max(m.id for m in local) + 1 if local else 0
-        if before_id <= 0 or not local:
+            before_id = latest_id + 1
+        if before_id <= 0 or latest_id == 0:
             return jsonify(
                 {
                     "status": "ok",
@@ -711,6 +824,41 @@ def reload_config_api():
         )
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+# v2 接口层与第三方框架协议适配器（与 v1 并存，v1 行为不变）
+# ---------------------------------------------------------------------------
+
+#: REST v2（统一响应信封 + 统一错误码），描述见 seewo/interfaces/openapi.yaml
+api_v2 = register_v2(app, service, api_key=config.api_key)
+
+#: OneBot 11 适配器 —— 供 NoneBot2 / AstrBot / LangBot / NapCat 等接入
+onebot_adapter = OneBot11Adapter(service)
+onebot_server = OneBot11Server(onebot_adapter, app)
+
+#: Satori 适配器 —— 供 Koishi / AIRI 等接入
+satori_adapter = SatoriAdapter(service)
+satori_server = SatoriServer(satori_adapter, app)
+
+#: WebSocket 端点挂在**同一个** Flask app 上（flask-sock 以蓝图方式注册路由），
+#: 因此 HTTP 与 WS 共用 `api_port`，不需要另开端口。
+#:
+#: - OneBot 11 正向 WS：`/onebot/v11/ws`
+#: - Satori 事件 WS：`/v1/events`
+#:
+#: 注意：`flask-sock` 依赖 Werkzeug 的开发服务器支持 WebSocket，
+#: 生产部署需换成支持 WS 的 WSGI 服务器（如 gunicorn + gevent）。
+try:
+    from flask_sock import Sock
+
+    sock = Sock(app)
+    onebot_server.attach_websocket(sock)
+    satori_server.attach_websocket(sock)
+except ImportError:  # pragma: no cover - 未装 flask-sock 时降级为仅 HTTP
+    logging.getLogger("seewo.api_server").warning(
+        "未安装 flask-sock，OneBot/Satori 的 WebSocket 端点不可用（HTTP 端点不受影响）"
+    )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,145 @@
+"""协议端点挂载测试 —— 验证 api_server 真的把协议端点挂上了。
+
+这些用例防的是一类特别隐蔽的回归：**适配器写好了、HTTP 端点也注册了，
+但 WebSocket 端点从未 attach** —— 代码看起来齐全，实际连不上。
+
+全程离线：只检查 Flask 路由表，不发起任何网络请求。
+"""
+
+import pathlib
+import re
+
+import pytest
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+OPENAPI_PATH = REPO_ROOT / "seewo" / "interfaces" / "openapi.yaml"
+
+
+@pytest.fixture(scope="module")
+def api_server():
+    import api_server as mod
+
+    return mod
+
+
+def _rules(app):
+    return {r.rule for r in app.url_map.iter_rules()}
+
+
+class TestMountedEndpoints:
+    def test_v1_endpoints_still_mounted(self, api_server):
+        """v1 接口不能因为加了 v2/协议层而丢失"""
+        rules = _rules(api_server.app)
+        for expected in (
+            "/api/status",
+            "/api/messages",
+            "/api/send",
+            "/api/send_image",
+            "/api/send_audio",
+            "/api/history",
+            "/api/load_earlier",
+            "/api/sync_all",
+            "/api/refresh",
+            "/api/config/reload",
+            "/api/login/qrcode",
+            "/api/login/status",
+        ):
+            assert expected in rules, f"v1 端点丢失: {expected}"
+
+    def test_v2_endpoints_mounted(self, api_server):
+        rules = _rules(api_server.app)
+        for expected in (
+            "/api/v2/status",
+            "/api/v2/capabilities",
+            "/api/v2/messages",
+            "/api/v2/history",
+            "/api/v2/sync",
+            "/api/v2/events",
+            "/api/v2/connection",
+        ):
+            assert expected in rules, f"v2 端点未挂载: {expected}"
+
+    def test_onebot_http_endpoint_mounted(self, api_server):
+        rules = _rules(api_server.app)
+        assert "/onebot/v11/<action>" in rules
+        assert "/onebot/v11/get_status" in rules
+
+    def test_onebot_websocket_endpoint_mounted(self, api_server):
+        """OneBot 11 正向 WS —— 只注册了适配器但没 attach 是常见漏项"""
+        assert "/onebot/v11/ws" in _rules(api_server.app)
+
+    def test_satori_http_endpoints_mounted(self, api_server):
+        rules = _rules(api_server.app)
+        # 无前缀形式
+        assert "/satori/v1/<action>" in rules
+        # 带 platform/account 前缀形式（Satori 规范）
+        assert "/<platform>/<account>/satori/v1/<action>" in rules
+
+    def test_satori_websocket_endpoint_mounted(self, api_server):
+        """Satori 事件 WS"""
+        assert "/v1/events" in _rules(api_server.app)
+
+
+class TestProtocolEndpointBehavior:
+    """端点真的能响应（不只是路由存在）"""
+
+    def test_onebot_action_responds(self, api_server):
+        client = api_server.app.test_client()
+        resp = client.post(
+            "/onebot/v11/get_version_info",
+            json={},
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["status"] == "ok"
+        assert body["retcode"] == 0
+
+    def test_satori_action_responds(self, api_server):
+        client = api_server.app.test_client()
+        resp = client.post(
+            "/satori/v1/session.create",
+            json={},
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert "error" not in body
+        assert body["platform"]
+
+    def test_satori_unknown_action_returns_error(self, api_server):
+        client = api_server.app.test_client()
+        resp = client.post("/satori/v1/nope.nope", json={})
+        assert resp.status_code == 400
+        assert "error" in resp.get_json()
+
+
+class TestOpenApiMatchesImplementation:
+    """OpenAPI 描述必须与实际挂载的端点一致 —— 否则文档就是骗人的。"""
+
+    @staticmethod
+    def _documented_paths() -> set[str]:
+        text = OPENAPI_PATH.read_text(encoding="utf-8")
+        # 只取 paths 段下的二级路径（`  /xxx:` 形式），避免误抓 components
+        return set(re.findall(r"^  (/api/v2/[a-z_]+):", text, re.MULTILINE))
+
+    def test_spec_file_exists(self):
+        assert OPENAPI_PATH.exists(), "OpenAPI 描述文件缺失"
+
+    def test_documented_paths_match_mounted_routes(self, api_server):
+        documented = self._documented_paths()
+        assert documented, "未能从 OpenAPI 中解析出任何路径"
+        mounted = {r for r in _rules(api_server.app) if r.startswith("/api/v2/")}
+        assert documented == mounted, (
+            f"OpenAPI 描述与实际端点不一致: "
+            f"仅文档有={sorted(documented - mounted)} "
+            f"仅实现有={sorted(mounted - documented)}"
+        )
+
+    def test_spec_declares_all_error_codes(self):
+        """统一错误码必须在 OpenAPI 里全部出现，否则第三方无法据此处理"""
+        text = OPENAPI_PATH.read_text(encoding="utf-8")
+        from seewo.interfaces.rest import ApiErrorCode
+
+        for code in ApiErrorCode:
+            if code is ApiErrorCode.OK:
+                continue
+            assert code.value in text, f"OpenAPI 未声明错误码: {code.value}"
