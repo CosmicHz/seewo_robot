@@ -137,9 +137,11 @@ class Session:
     """希沃会话封装。
 
     **并发安全**：`init()` / `refresh()` 由 `_lock` 保护。
-    修复的竞态：多个并发请求同时遇到 Token 失效时，会各自触发一次重登，
-    互相覆盖 `tokens.json`，并让部分请求拿到半初始化的会话。
-    现在并发调用 refresh() 只会真正重登一次，其余等待并复用结果。
+    修复的竞态：多个并发请求同时遇到 Token 失效时，部分请求可能拿到
+    半初始化的会话。现在 `init()` / `refresh()` 互斥执行，不会出现半初始化状态。
+
+    注意：锁只做**串行化**，不做**去重** —— N 个并发 refresh() 会依次各执行
+    一次重新初始化（`auto_login=False`，只重读 tokens.json，不会弹扫码）。
     """
 
     def __init__(self):
@@ -171,7 +173,7 @@ class Session:
     def refresh(self):
         """刷新会话（线程安全）。
 
-        并发调用时只有第一个真正执行重登，后续调用直接复用其结果。
+        并发调用时串行执行（每次都重新初始化），不会交错出半初始化状态。
         """
         with self._lock:
             self._initialized = False

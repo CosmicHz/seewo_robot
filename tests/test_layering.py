@@ -116,14 +116,21 @@ def _imported_modules(path: pathlib.Path) -> set[str]:
                 found.add(alias.name)
         elif isinstance(node, ast.ImportFrom):
             if node.level == 0:
-                if node.module:
-                    found.add(node.module)
+                target = node.module or ""
             else:
                 base = package
                 for _ in range(node.level - 1):
                     base = base.rsplit(".", 1)[0]
                 target = f"{base}.{node.module}" if node.module else base
-                found.add(target)
+            if not target:
+                continue
+            found.add(target)
+            # #32：`from seewo import integrations` 只记 `seewo` 会漏掉子模块依赖。
+            # 导入的名字可能是子模块，一并记为 `target.name`（多记无害：
+            # 只有以 `seewo` 开头且不在白名单的才算违规）。
+            for alias in node.names:
+                if alias.name != "*":
+                    found.add(f"{target}.{alias.name}")
     return found
 
 
@@ -323,3 +330,13 @@ def test_module_count_is_reasonable():
     files = _python_files(SEEWO_ROOT)
     # 超过 30 个文件说明抽象层膨胀，需要重新审视
     assert len(files) <= 30, f"seewo/ 下有 {len(files)} 个文件，疑似过度设计"
+
+
+def test_package_level_import_is_resolved(tmp_path, monkeypatch):
+    """#32：`from seewo import integrations` 必须被识别为依赖 `seewo.integrations`。"""
+    fake = SEEWO_ROOT / "core" / "_layering_probe.py"
+    fake.write_text("def f():\n    from seewo import integrations\n", encoding="utf-8")
+    try:
+        assert "seewo.integrations" in _imported_modules(fake)
+    finally:
+        fake.unlink()
