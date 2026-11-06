@@ -282,6 +282,70 @@ class TestOneBotParsing:
             ob.parse_incoming({"post_type": "meta_event"})
 
 
+class TestOneBotCqCode:
+    """#19：字符串消息默认按 CQ 码解析（OneBot 11），`auto_escape=true` 才视为纯文本。"""
+
+    def test_cq_image_is_parsed_not_sent_as_text(self, service, provider):
+        ob = OneBot11Adapter(service)
+        result = ob.handle_api(
+            "send_private_msg",
+            {"user_id": "u1", "message": "看[CQ:image,file=http://x/a.png]"},
+        )
+        assert result["status"] == "ok"
+        segs = provider.sent[0].segments
+        assert [s.type for s in segs] == [SegmentType.TEXT, SegmentType.IMAGE]
+        assert segs[1].url == "http://x/a.png"
+
+    def test_cq_escapes_are_decoded(self, service, provider):
+        ob = OneBot11Adapter(service)
+        ob.handle_api(
+            "send_private_msg", {"user_id": "u1", "message": "a&#91;b&#93;&amp;c"}
+        )
+        assert provider.sent[0].segments[0].text == "a[b]&c"
+
+    def test_auto_escape_keeps_raw_text(self, service, provider):
+        ob = OneBot11Adapter(service)
+        raw = "[CQ:image,file=http://x/a.png]"
+        ob.handle_api(
+            "send_private_msg",
+            {"user_id": "u1", "message": raw, "auto_escape": True},
+        )
+        segs = provider.sent[0].segments
+        assert len(segs) == 1
+        assert segs[0].type is SegmentType.TEXT
+        assert segs[0].text == raw
+
+    def test_unknown_cq_is_rejected_not_sent(self, service, provider):
+        """未识别的 CQ 码不能当文本原样发出，也不能静默丢弃。"""
+        ob = OneBot11Adapter(service)
+        result = ob.handle_api(
+            "send_private_msg", {"user_id": "u1", "message": "[CQ:face,id=1]"}
+        )
+        assert result["status"] == "failed"
+        assert result["retcode"] == 100
+        assert provider.sent == ()
+
+    def test_cq_image_rejected_when_platform_lacks_image(self, provider):
+        """CQ 码解析出的媒体段同样受能力闸门约束。"""
+        provider.capabilities = PlatformCapabilities(send_text=True)
+        svc = MessageService(provider, MemoryStore())
+        svc.connect()
+        result = OneBot11Adapter(svc).handle_api(
+            "send_private_msg",
+            {"user_id": "u1", "message": "[CQ:image,file=http://x/a.png]"},
+        )
+        assert result["retcode"] == 100
+        assert provider.sent == ()
+
+
+class TestOneBotSetRestart:
+    def test_set_restart_reports_unsupported(self, service):
+        """#20：不能重启就不返回 ok。"""
+        result = OneBot11Adapter(service).handle_api("set_restart", {})
+        assert result["status"] == "failed"
+        assert result["retcode"] == 100
+
+
 # ===========================================================================
 # Satori
 # ===========================================================================
@@ -291,6 +355,22 @@ class TestSatoriElements:
     def test_encode_text_only(self):
         content = SatoriAdapter.encode_content((Segment.text_seg("你好"),))
         assert content == "你好"
+
+    def test_quote_encodes_target_as_child_message(self):
+        """#22：Satori 规范中 <quote> 无 id 属性，被引用消息以子元素表达"""
+        content = SatoriAdapter.encode_content((Segment.quote("m1"),))
+        assert content == '<quote><message id="m1"/></quote>'
+
+    def test_quote_roundtrip_preserves_id(self):
+        original = (Segment.quote("m&1"), Segment.text_seg("回复"))
+        parsed = SatoriAdapter.parse_content(SatoriAdapter.encode_content(original))
+        assert parsed[0].type is SegmentType.QUOTE
+        assert parsed[0].message_id == "m&1"
+        assert parsed[1].text == "回复"
+
+    def test_quote_attribute_form_is_also_accepted(self):
+        parsed = SatoriAdapter.parse_content('<quote id="m2"></quote>')
+        assert parsed[0].message_id == "m2"
 
     def test_encode_image(self):
         content = SatoriAdapter.encode_content(
@@ -486,8 +566,38 @@ class TestSatoriApi:
         )
         assert isinstance(result, list)
         assert len(result) == 1
-        assert result[0]["segments"][0]["text"] == "你好"
+        # #36：返回 Satori Message 资源（必需 `id`；`content` 是元素字符串），
+        # 而不是内部 Message.to_dict()
+        assert "id" in result[0]
+        assert "segments" not in result[0]
+        assert result[0]["content"] == "你好"
+        assert result[0]["channel"]["type"] == 1  # Satori ChannelType.DIRECT
         assert provider.sent[0].segments[0].text == "你好"
+
+    def test_quote_roundtrip_keeps_message_id(self):
+        """#22：<quote> 编码时保留被引用消息 id（规范写法为子元素 <message id>）"""
+        content = SatoriAdapter.encode_content((Segment.quote("m1"),))
+        assert content == '<quote><message id="m1"/></quote>'
+        assert SatoriAdapter.parse_content(content)[0].message_id == "m1"
+
+    def test_quote_attribute_form_still_parsed(self):
+        """兼容把 id 写在 <quote> 属性上的实现"""
+        parsed = SatoriAdapter.parse_content('<quote id="m2"></quote>')
+        assert parsed[0].message_id == "m2"
+
+    def test_message_delete_success_is_not_500(self, service):
+        """#34：撤回成功返回 None 时，HTTP 层不能因 `"error" in None` 崩溃"""
+        from flask import Flask
+
+        from seewo.integrations.satori import SatoriServer
+
+        app = Flask(__name__)
+        SatoriServer(SatoriAdapter(service), app)
+        resp = app.test_client().post(
+            "/satori/v1/message.delete", json={"message_id": "m1"}
+        )
+        assert resp.status_code == 200
+        assert service.provider.remembered == ["m1"]
 
     def test_message_create_requires_content(self, service):
         sa = SatoriAdapter(service)
@@ -717,3 +827,36 @@ class TestSubscribeWithoutConnect:
         service.connect()
         service.poll_once()
         assert [f for f in conn.frames if f.get("post_type") == "message"] == []
+
+
+class TestSatoriHttpServer:
+    """Satori HTTP 服务端的响应形态（经 Flask，离线）。"""
+
+    @pytest.fixture
+    def client(self, service):
+        from flask import Flask
+
+        from seewo.integrations.satori import SatoriServer
+
+        app = Flask(__name__)
+        SatoriServer(SatoriAdapter(service), app)
+        return app.test_client()
+
+    def test_message_delete_success_is_200(self, client, provider):
+        """#34：撤回成功时结果为 None，此前 `"error" in None` 抛 TypeError → 500"""
+        resp = client.post("/satori/v1/message.delete", json={"message_id": "m1"})
+        assert resp.status_code == 200
+        assert resp.get_json() == {}
+        assert provider.remembered == ["m1"]
+
+    def test_message_create_array_is_200(self, client):
+        resp = client.post(
+            "/satori/v1/message.create", json={"channel_id": "c1", "content": "hi"}
+        )
+        assert resp.status_code == 200
+        assert isinstance(resp.get_json(), list)
+
+    def test_error_result_is_400(self, client):
+        resp = client.post("/satori/v1/message.create", json={"channel_id": "c1"})
+        assert resp.status_code == 400
+        assert "error" in resp.get_json()

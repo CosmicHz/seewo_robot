@@ -102,6 +102,24 @@ _ATTR_RE = re.compile(
 )
 
 
+def _quote_target(attrs: dict[str, str], inner: str | None) -> str:
+    """取 <quote> 引用的消息 id。
+
+    规范写法是子元素 ``<quote><message id="x"/></quote>``；
+    兼容部分实现直接写在属性上的 ``<quote id="x">``。
+    """
+    if inner:
+        m = re.search(r"<message\b[^>]*>", inner, re.IGNORECASE)
+        if m:
+            for a in _ATTR_RE.finditer(m.group(0)):
+                if a.group("key").lower() == "id":
+                    value = (
+                        a.group("dq") if a.group("dq") is not None else a.group("sq")
+                    )
+                    return html.unescape(value or "")
+    return attrs.get("id", "")
+
+
 class SatoriAdapter(IntegrationServer):
     """Satori 协议适配器。
 
@@ -223,7 +241,10 @@ class SatoriAdapter(IntegrationServer):
                 if seg.name:
                     attrs.append(f'name="{html.escape(seg.name, quote=True)}"')
             elif seg.type is SegmentType.QUOTE:
-                parts.append("<quote></quote>")
+                # Satori 规范：<quote> 没有 id 属性，被引用消息以子元素
+                # `<message id="..."/>` 表达（#22：此前编码成空 <quote>，丢了 id）
+                mid = html.escape(seg.message_id, quote=True)
+                parts.append(f'<quote><message id="{mid}"/></quote>')
                 continue
             else:
                 if seg.url:
@@ -265,7 +286,9 @@ class SatoriAdapter(IntegrationServer):
                     Segment.at(attrs.get("id", ""), name=attrs.get("name", ""))
                 )
             elif seg_type is SegmentType.QUOTE:
-                segments.append(Segment.quote(attrs.get("id", "")))
+                segments.append(
+                    Segment.quote(_quote_target(attrs, match.group("inner")))
+                )
             elif seg_type is not None:
                 segments.append(
                     Segment(
@@ -446,14 +469,34 @@ class SatoriAdapter(IntegrationServer):
             raise TranslationError("content 不含任何消息内容")
         channel_id = str(params.get("channel_id", ""))
         sent = self.service.send(segments, conversation_id=channel_id)
-        return [sent.to_dict()]
+        return [self._satori_message(sent)]
+
+    def _satori_message(self, message: Message) -> dict[str, Any]:
+        """平台中立消息 → Satori `Message` 资源（#36）。
+
+        Satori 的 Message 是 ``{id, content, channel?, user?, created_at?}``，
+        不是内部 `Message.to_dict()`。希沃发送不返回服务端 id，`id` 如实为空串。
+        """
+        out: dict[str, Any] = {
+            "id": message.id,
+            "content": self.encode_content(message.segments),
+            "channel": {
+                "id": message.conversation_id or "seewo-direct",
+                "type": 1,  # Satori Channel.Type.DIRECT
+            },
+        }
+        if message.user_id:
+            out["user"] = {"id": message.user_id}
+        if message.timestamp:
+            out["created_at"] = message.timestamp
+        return out
 
     def _api_message_get(self, params: dict[str, Any]) -> Any:
         message_id = str(params.get("message_id", ""))
         found = self.service.find(message_id)
         if found is None:
             raise TranslationError(f"消息不存在: {message_id}")
-        return found.to_dict()
+        return self._satori_message(found)
 
     def _api_message_delete(self, params: dict[str, Any]) -> Any:
         message_id = str(params.get("message_id", ""))

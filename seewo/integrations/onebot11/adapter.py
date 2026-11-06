@@ -21,7 +21,12 @@
 - `get_group_list` 返回空列表（没有群概念）；
 - `send_group_msg` 返回 retcode=100（不支持），而不是静默丢弃。
 
-消息段采用 OneBot 11 标准 CQ 码：
+消息格式（OneBot 11）：
+- **段数组**（推荐）：`[{"type": "text", "data": {"text": "..."}}, ...]`
+- **字符串**：默认按 CQ 码解析（`[CQ:image,file=...]`）；
+  请求带 `auto_escape=true` 时整串视为纯文本。
+
+段类型映射：
 - 文本：`{"type": "text", "data": {"text": "..."}}`
 - 图片：`{"type": "image", "data": {"file": "http://..."}}`
 - 音频：`{"type": "record", "data": {"file": "http://..."}}`
@@ -30,6 +35,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -79,6 +85,36 @@ RETCODE_UNSUPPORTED = 100
 RETCODE_UNAUTHORIZED = 1401
 RETCODE_FORBIDDEN = 1403
 
+#: CQ 码：`[CQ:type,k=v,k=v]`
+_CQ_PATTERN = re.compile(r"\[CQ:([A-Za-z0-9_.\-]+)((?:,[^,\]]*)*)\]")
+
+
+def _cq_unescape(text: str, *, in_param: bool = False) -> str:
+    """CQ 码反转义（OneBot 11）：`&#91;`→`[`、`&#93;`→`]`、`&amp;`→`&`；参数值内还有 `&#44;`→`,`。"""
+    if in_param:
+        text = text.replace("&#44;", ",")
+    return text.replace("&#91;", "[").replace("&#93;", "]").replace("&amp;", "&")
+
+
+def parse_cq_string(raw: str) -> list[dict[str, Any]]:
+    """把含 CQ 码的字符串拆成 OneBot 段数组（不做类型映射）。"""
+    items: list[dict[str, Any]] = []
+    pos = 0
+    for m in _CQ_PATTERN.finditer(raw):
+        if m.start() > pos:
+            items.append(
+                {"type": "text", "data": {"text": _cq_unescape(raw[pos : m.start()])}}
+            )
+        data: dict[str, Any] = {}
+        for pair in filter(None, m.group(2).split(",")):
+            key, _, value = pair.partition("=")
+            data[key] = _cq_unescape(value, in_param=True)
+        items.append({"type": m.group(1), "data": data})
+        pos = m.end()
+    if pos < len(raw):
+        items.append({"type": "text", "data": {"text": _cq_unescape(raw[pos:])}})
+    return items
+
 
 def _is_empty_segment(seg: Segment) -> bool:
     """判断一个段是否「没有实际内容」。
@@ -92,6 +128,10 @@ def _is_empty_segment(seg: Segment) -> bool:
         return not seg.user_id
     if seg.type is SegmentType.QUOTE:
         return not seg.message_id
+    if seg.type is SegmentType.UNKNOWN:
+        # 未识别的段（如 `[CQ:face,id=1]`）不算空：必须保留，交给能力闸门
+        # 明确拒绝，而不是在这里被静默过滤掉
+        return False
     return not seg.url
 
 
@@ -241,10 +281,16 @@ class OneBot11Adapter(IntegrationServer):
         )
 
     @staticmethod
-    def _parse_segments(raw: Any) -> tuple[Segment, ...]:
-        """解析 OneBot 消息段（支持字符串与段数组两种形态）。"""
+    def _parse_segments(raw: Any, *, auto_escape: bool = False) -> tuple[Segment, ...]:
+        """解析 OneBot 消息（字符串或段数组）。
+
+        字符串默认按 CQ 码解析（OneBot 11 规范）；`auto_escape=True` 时整串为纯文本。
+        未识别的 CQ / 段类型归为 `UNKNOWN`，随后由能力闸门拒绝 —— 不当文本原样发出。
+        """
         if isinstance(raw, str):
-            return (Segment.text_seg(raw),) if raw else ()
+            if auto_escape:
+                return (Segment.text_seg(raw),) if raw else ()
+            raw = parse_cq_string(raw)
         if not isinstance(raw, list):
             raise TranslationError(f"无法解析的消息内容: {type(raw).__name__}")
 
@@ -343,7 +389,9 @@ class OneBot11Adapter(IntegrationServer):
 
     def _do_send(self, params: dict[str, Any]) -> Any:
         """send_msg / send_private_msg 的公共实现。"""
-        segments = self._parse_segments(params.get("message"))
+        segments = self._parse_segments(
+            params.get("message"), auto_escape=params.get("auto_escape") is True
+        )
         if not segments:
             raise TranslationError("message 不能为空")
 
@@ -413,7 +461,8 @@ class OneBot11Adapter(IntegrationServer):
         return None
 
     def _api_set_restart(self, params: dict[str, Any]) -> Any:
-        return None
+        """本服务不能被协议端重启：明确返回不支持（retcode 100），不假装成功。"""
+        raise CapabilityError("set_restart", "本服务不支持通过 OneBot 重启")
 
     # ------------------------------------------------------------------
     # 推送
