@@ -31,6 +31,7 @@ import logging
 import re
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from ...core.service import MessageService
@@ -56,6 +57,18 @@ OP_PING = 1
 OP_PONG = 2
 OP_IDENTIFY = 3
 OP_READY = 4
+
+
+@dataclass
+class SignalResult:
+    """一帧信令的处理结果。"""
+
+    frames: list[dict[str, Any]]
+    #: IDENTIFY 通过（连接此后才可接收事件）
+    identified: bool = False
+    #: IDENTIFY 被拒（服务端应断开连接）
+    rejected: bool = False
+
 
 # —— 平台中立段 → Satori 元素标签 ——
 _SEGMENT_TO_ELEMENT: dict[SegmentType, str] = {
@@ -323,8 +336,16 @@ class SatoriAdapter(IntegrationServer):
     def handle_signal(self, raw: str) -> list[dict[str, Any]]:
         """处理客户端信令帧，返回要回发的帧列表。
 
-        Args:
-            raw: 客户端发来的 JSON 文本
+        Raises:
+            TranslationError: 帧格式非法
+        """
+        return self.process_signal(raw).frames
+
+    def process_signal(self, raw: str) -> SignalResult:
+        """处理客户端信令帧，同时报告鉴权结果。
+
+        WS 服务端据 `identified` 决定**何时**把连接登记进广播集合
+        （IDENTIFY 通过之前不推送任何事件），据 `rejected` 决定是否断开。
 
         Raises:
             TranslationError: 帧格式非法
@@ -339,33 +360,37 @@ class SatoriAdapter(IntegrationServer):
             raise TranslationError("信令帧必须是对象")
         op = frame.get("op")
         body = frame.get("body") or {}
+        if not isinstance(body, dict):
+            raise TranslationError("信令帧 body 必须是对象")
 
         if op == OP_PING:
-            return [self.pong_frame()]
+            return SignalResult([self.pong_frame()])
         if op == OP_IDENTIFY:
-            # 认证 + 会话恢复：token 不匹配则拒绝（返回 ERROR 帧）
-            if self.config.token and body.get("token") != self.config.token:
-                return [
-                    self.make_signal(
-                        OP_EVENT,
-                        {
-                            "type": "error",
-                            "timestamp": int(time.time() * 1000),
-                            "login": self._login_block(),
-                            "message": {"content": "invalid token"},
-                        },
-                    )
-                ]
+            if not self.check_token(body.get("token")):
+                return SignalResult(
+                    [
+                        self.make_signal(
+                            OP_EVENT,
+                            {
+                                "type": "error",
+                                "timestamp": int(time.time() * 1000),
+                                "login": self._login_block(),
+                                "message": {"content": "invalid token"},
+                            },
+                        )
+                    ],
+                    rejected=True,
+                )
             resume_sn = body.get("sn")
             if isinstance(resume_sn, int) and resume_sn > 0:
-                # 客户端要求补发：把游标推进到它已收到的位置，
-                # 之后新事件 sn 继续递增 —— 语义上等价于「不重发已收事件」。
+                # 只推进 sn，**不补发**断线期间的事件：本服务不保留已推送事件的缓冲。
+                # 断线期间的消息请通过 HTTP API / `/api/v2/history` 补拉。
                 with self._sn_lock:
                     self._sn = max(self._sn, resume_sn)
-            return [self.ready_frame()]
+            return SignalResult([self.ready_frame()], identified=True)
         if op == OP_EVENT:
             # 客户端不应主动发 EVENT 信令；忽略。
-            return []
+            return SignalResult([])
         raise TranslationError(f"未知的操作码: {op!r}")
 
     def on_client_event(self, payload: dict[str, Any]) -> Message:

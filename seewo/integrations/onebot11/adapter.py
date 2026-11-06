@@ -75,6 +75,9 @@ RETCODE_OK = 0
 RETCODE_ASYNC = 1
 RETCODE_ILLEGAL_PARAM = 1400
 RETCODE_UNSUPPORTED = 100
+#: OneBot 11 约定 14xx 与 HTTP 400/401/403 对应（WS 无 HTTP 状态码时用）
+RETCODE_UNAUTHORIZED = 1401
+RETCODE_FORBIDDEN = 1403
 
 
 def _is_empty_segment(seg: Segment) -> bool:
@@ -294,7 +297,7 @@ class OneBot11Adapter(IntegrationServer):
         except CapabilityError as e:
             return self._failed(RETCODE_UNSUPPORTED, str(e))
         except ProviderAuthError as e:
-            return self._failed(1401, f"认证失效: {e}")
+            return self._failed(RETCODE_UNAUTHORIZED, f"认证失效: {e}")
         except ProviderError as e:
             return self._failed(1400, str(e))
         except TranslationError as e:

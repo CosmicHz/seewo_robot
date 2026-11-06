@@ -14,7 +14,13 @@
 
 **Satori 规范 URL 前缀**
     ``/{platform}/{account}/satori/v1/...`` —— 兼容规范的调用方会带上
-    这段前缀，本服务同时接受带前缀与不带前缀两种形式。
+    这段前缀，本服务的 **HTTP API** 同时接受带前缀与不带前缀两种形式
+    （事件 WS 只有 ``{config.path}`` 一个地址）。
+
+**鉴权**
+    配置了令牌时：HTTP API 校验 ``Authorization: Bearer <token>``（不符 → 401）；
+    事件 WS 校验 IDENTIFY 帧里的 ``token``，通过后才开始推送事件，
+    不通过则回一个 error 事件帧后断开。
 """
 
 from __future__ import annotations
@@ -23,7 +29,7 @@ import logging
 import threading
 from typing import Any
 
-from ...integrations.base import IntegrationConfig
+from ...integrations.base import IntegrationConfig, request_token
 from ...integrations.satori.adapter import SatoriAdapter
 
 logger = logging.getLogger("seewo.integration.satori.server")
@@ -72,11 +78,20 @@ class SatoriServer:
             methods=["POST"],
         )
         def satori_action(action: str, platform: str = "", account: str = ""):
-            params = request.get_json(silent=True) or {}
+            # Satori HTTP API 鉴权：`Authorization: Bearer <token>`（不接受 query 参数）
+            if not adapter.check_token(request_token(request, allow_query=False)):
+                return jsonify({"error": "Unauthorized"}), 401
+            params = request.get_json(silent=True)
+            if params is None:
+                params = {}
+            if not isinstance(params, dict):
+                return jsonify({"error": "请求体必须是 JSON 对象"}), 400
             result = adapter.handle_api(action, params)
-            if "error" in result:
+            # 成功结果可能是 None（如 message.delete）、数组或对象；
+            # 只有「对象且含 error 键」才是失败。
+            if isinstance(result, dict) and "error" in result:
                 return jsonify(result), 400
-            return jsonify(result)
+            return jsonify(result if result is not None else {})
 
     def handle_action(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
         """直接调用适配器（不经 HTTP，便于测试）。"""
@@ -93,23 +108,31 @@ class SatoriServer:
 
         @sock_server.route(ws_path)
         def satori_events(ws):  # pragma: no cover - 需要真实 WS 客户端
-            adapter.register_connection(ws)
+            # IDENTIFY 通过之前**不**登记进广播集合 —— 未认证的连接收不到任何事件。
+            identified = False
             try:
                 while True:
                     raw = ws.receive()
                     if raw is None:
                         break
                     try:
-                        frames = adapter.handle_signal(raw)
+                        result = adapter.process_signal(raw)
                     except Exception as e:
                         logger.warning("Satori 信令帧处理失败: %s", e)
                         continue
-                    for frame in frames:
+                    for frame in result.frames:
                         ws.send(frame)
+                    if result.rejected:
+                        logger.warning("Satori IDENTIFY 鉴权失败，关闭连接")
+                        break
+                    if result.identified and not identified:
+                        identified = True
+                        adapter.register_connection(ws)
             except Exception as e:
                 logger.debug("Satori WS 连接结束: %s", e)
             finally:
                 adapter.unregister_connection(ws)
+                adapter._safe_close(ws)
 
     def start_ws(self, app: Any, host: str, port: int) -> None:
         """用 flask-sock 启动 WS 服务（阻塞）。"""

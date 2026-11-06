@@ -19,10 +19,31 @@ import logging
 import threading
 from typing import Any
 
-from ...integrations.base import IntegrationConfig
-from ...integrations.onebot11.adapter import OneBot11Adapter
+from ...integrations.base import IntegrationConfig, request_token
+from ...integrations.onebot11.adapter import (
+    RETCODE_FORBIDDEN,
+    RETCODE_ILLEGAL_PARAM,
+    RETCODE_UNAUTHORIZED,
+    OneBot11Adapter,
+)
 
 logger = logging.getLogger("seewo.integration.onebot11.server")
+
+
+def _auth_failure(adapter: OneBot11Adapter, request: Any, jsonify: Any):
+    """校验请求令牌；通过返回 None，否则返回错误响应。
+
+    OneBot 11 鉴权约定：未提供令牌 → HTTP 401，令牌不匹配 → HTTP 403。
+    """
+    provided = request_token(request)
+    if adapter.check_token(provided):
+        return None
+    if provided:
+        status, retcode, msg = 403, RETCODE_FORBIDDEN, "Forbidden"
+    else:
+        status, retcode, msg = 401, RETCODE_UNAUTHORIZED, "Unauthorized"
+    body = {"status": "failed", "retcode": retcode, "data": None, "msg": msg}
+    return jsonify(body), status
 
 
 class OneBot11Server:
@@ -58,15 +79,41 @@ class OneBot11Server:
 
         prefix = self.adapter.api_prefix
         adapter = self.adapter
+        ws_path = self.ws_path
+
+        @app.before_request
+        def onebot_ws_handshake_auth():
+            # WS 握手在进入 flask-sock 路由函数前就已完成升级，
+            # 在路由里已无法回 HTTP 401/403 —— 因此在 before_request 拦截。
+            if request.path != ws_path:
+                return None
+            return _auth_failure(adapter, request, jsonify)
 
         @app.route(f"{prefix}/<action>", methods=["POST"])
         def onebot_action(action: str):
-            params = request.get_json(silent=True) or {}
+            denied = _auth_failure(adapter, request, jsonify)
+            if denied is not None:
+                return denied
+            params = request.get_json(silent=True)
+            if params is None:
+                params = {}
+            if not isinstance(params, dict):
+                return jsonify(
+                    {
+                        "status": "failed",
+                        "retcode": RETCODE_ILLEGAL_PARAM,
+                        "data": None,
+                        "msg": "请求体必须是 JSON 对象",
+                    }
+                ), 400
             result = adapter.handle_api(action, params)
             return jsonify(result)
 
         @app.route(f"{prefix}/get_status", methods=["GET"])
         def onebot_status():
+            denied = _auth_failure(adapter, request, jsonify)
+            if denied is not None:
+                return denied
             return jsonify(adapter.handle_api("get_status", {}))
 
     def handle_action(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -87,6 +134,14 @@ class OneBot11Server:
 
         @sock_server.route(self.ws_path)
         def onebot_ws(ws):  # pragma: no cover - 需要真实 WS 客户端
+            from flask import request
+
+            # 握手阶段鉴权：未通过则不登记进广播集合、直接关闭，
+            # 保证未认证的连接收不到任何事件。
+            if not adapter.check_token(request_token(request)):
+                logger.warning("OneBot WS 鉴权失败，关闭连接")
+                adapter._safe_close(ws)
+                return
             adapter.register_connection(ws)
             try:
                 # OneBot 11 正向 WS：连上即下发 lifecycle

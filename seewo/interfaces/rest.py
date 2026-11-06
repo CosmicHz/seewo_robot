@@ -34,8 +34,10 @@ code               HTTP    含义
 
 from __future__ import annotations
 
+import hmac
 import logging
 import queue
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -163,9 +165,20 @@ class ApiV2:
     以 Flask Blueprint 形式挂载到任意 Flask app。
     """
 
-    def __init__(self, service: MessageService, api_key: str = "") -> None:
+    def __init__(
+        self, service: MessageService, api_key: str | Callable[[], str] = ""
+    ) -> None:
         self.service = service
-        self.api_key = api_key
+        #: 字符串或无参可调用对象。传可调用对象时**每次请求实时读取**，
+        #: 这样 `config.json` 热重载换 key 后立即生效（旧 key 立刻失效），
+        #: 与 v1 `require_api_key` 每次读 `config.api_key` 的行为一致。
+        self._api_key = api_key
+
+    @property
+    def api_key(self) -> str:
+        """当前生效的 API Key。"""
+        key = self._api_key() if callable(self._api_key) else self._api_key
+        return key or ""
 
     # ------------------------------------------------------------------
     # 蓝图
@@ -199,12 +212,13 @@ class ApiV2:
 
     def _authorize(self) -> ApiError | None:
         """校验 API Key。未配置 `api_key` 时放行（本地部署场景）。"""
-        if not self.api_key:
+        expected = self.api_key
+        if not expected:
             return None
         from flask import request
 
-        key = request.headers.get("X-API-Key") or request.args.get("api_key")
-        if key != self.api_key:
+        key = request.headers.get("X-API-Key") or request.args.get("api_key") or ""
+        if not hmac.compare_digest(key.encode(), expected.encode()):
             return ApiError(ApiErrorCode.UNAUTHORIZED, "Invalid API key")
         return None
 
@@ -460,8 +474,13 @@ def _parse_segments(data: dict[str, Any]) -> tuple[Segment, ...]:
     return ()
 
 
-def register(app, service: MessageService, api_key: str = "") -> ApiV2:
-    """把 v2 端点挂到 Flask app，返回 `ApiV2` 实例。"""
+def register(
+    app, service: MessageService, api_key: str | Callable[[], str] = ""
+) -> ApiV2:
+    """把 v2 端点挂到 Flask app，返回 `ApiV2` 实例。
+
+    ``api_key`` 传可调用对象（如 ``lambda: config.api_key``）可让热重载生效。
+    """
     api = ApiV2(service, api_key=api_key)
     app.register_blueprint(api.blueprint())
     return api

@@ -19,6 +19,7 @@ WebSocket 收发                适配器（协议帧格式不同）
 
 from __future__ import annotations
 
+import hmac
 import logging
 import threading
 import time
@@ -44,7 +45,9 @@ class IntegrationConfig:
     Attributes:
         host: 监听地址
         port: 监听端口
-        token: 鉴权令牌（None = 不鉴权）
+        token: 鉴权令牌（None / 空串 = 不鉴权）
+        token_getter: 可选；提供时**每次校验实时调用**以取得令牌，
+            优先于 ``token``（用于跟随 ``config.json`` 热重载）
         path: 事件推送的 URL 路径（WS 型适配器用）
         heartbeat_interval: 心跳间隔（秒）；0 = 关闭
         reconnect_base_delay: 重连退避基数（秒）
@@ -56,6 +59,7 @@ class IntegrationConfig:
     host: str = "127.0.0.1"
     port: int = 0
     token: str | None = None
+    token_getter: Callable[[], str | None] | None = None
     path: str = "/events"
     heartbeat_interval: float = 10.0
     reconnect_base_delay: float = 1.0
@@ -155,6 +159,28 @@ class IntegrationServer:
     def translate_event(self, event: Event) -> Any | None:
         """把核心事件翻译成协议原生载荷。子类实现。"""
         raise NotImplementedError
+
+    # ------------------------------------------------------------------
+    # 鉴权
+    # ------------------------------------------------------------------
+
+    def expected_token(self) -> str:
+        """当前生效的令牌；空串表示不鉴权。"""
+        getter = self.config.token_getter
+        token = getter() if getter is not None else self.config.token
+        return token or ""
+
+    def check_token(self, provided: Any) -> bool:
+        """校验调用方提供的令牌。未配置令牌时一律放行。
+
+        用 `hmac.compare_digest` 做常量时间比较，避免计时侧信道。
+        """
+        expected = self.expected_token()
+        if not expected:
+            return True
+        if not isinstance(provided, str) or not provided:
+            return False
+        return hmac.compare_digest(provided.encode(), expected.encode())
 
     # ------------------------------------------------------------------
     # 连接管理
@@ -294,6 +320,23 @@ class IntegrationServer:
         )
 
 
+def request_token(request: Any, *, allow_query: bool = True) -> str:
+    """从 HTTP 请求中取出调用方令牌。
+
+    - ``Authorization: Bearer <token>``（OneBot 11 / Satori 共同约定）
+    - ``?access_token=<token>``（OneBot 11 约定；``allow_query=False`` 时不接受）
+
+    取不到时返回空串。
+    """
+    auth = request.headers.get("Authorization", "") or ""
+    scheme, _, value = auth.partition(" ")
+    if scheme.lower() == "bearer" and value.strip():
+        return value.strip()
+    if allow_query:
+        return request.args.get("access_token", "") or ""
+    return ""
+
+
 def now_ms() -> int:
     """当前毫秒时间戳。"""
     return int(time.time() * 1000)
@@ -305,4 +348,5 @@ __all__ = [
     "IntegrationServer",
     "TranslationError",
     "now_ms",
+    "request_token",
 ]

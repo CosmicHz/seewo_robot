@@ -23,6 +23,7 @@ from models import SeewoQrCode, SendResult
 from msg import msg
 from seewo.core.service import MessageService
 from seewo.core.store import JsonStore
+from seewo.integrations.base import IntegrationConfig
 from seewo.integrations.onebot11 import OneBot11Adapter, OneBot11Server
 from seewo.integrations.satori import SatoriAdapter, SatoriServer
 from seewo.interfaces.rest import register as register_v2
@@ -831,14 +832,26 @@ def reload_config_api():
 # ---------------------------------------------------------------------------
 
 #: REST v2（统一响应信封 + 统一错误码），描述见 seewo/interfaces/openapi.yaml
-api_v2 = register_v2(app, service, api_key=config.api_key)
+#: 鉴权一律**每次请求实时读** `config.api_key`（传 getter 而非字符串），
+#: 与 v1 `require_api_key` 一致：热重载换 key 后旧 key 立即失效。
+api_v2 = register_v2(app, service, api_key=lambda: config.api_key)
+
+
+def _protocol_config() -> IntegrationConfig:
+    """协议端点复用 `config.api_key` 作为访问令牌（实时读取）。
+
+    OneBot 11：``Authorization: Bearer <key>`` 或 ``?access_token=<key>``；
+    Satori：HTTP ``Authorization: Bearer <key>``，WS 在 IDENTIFY 的 ``token`` 中提供。
+    """
+    return IntegrationConfig(token_getter=lambda: config.api_key)
+
 
 #: OneBot 11 适配器 —— 供 NoneBot2 / AstrBot / LangBot / NapCat 等接入
-onebot_adapter = OneBot11Adapter(service)
+onebot_adapter = OneBot11Adapter(service, _protocol_config())
 onebot_server = OneBot11Server(onebot_adapter, app)
 
 #: Satori 适配器 —— 供 Koishi / AIRI 等接入
-satori_adapter = SatoriAdapter(service)
+satori_adapter = SatoriAdapter(service, _protocol_config())
 satori_server = SatoriServer(satori_adapter, app)
 
 #: WebSocket 端点挂在**同一个** Flask app 上（flask-sock 以蓝图方式注册路由），

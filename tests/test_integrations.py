@@ -362,6 +362,46 @@ class TestSatoriSignals:
         frames = sa.handle_signal(json.dumps({"op": 3, "body": {"token": "secret"}}))
         assert frames[0]["op"] == 4
 
+    def test_process_signal_reports_rejection(self, service):
+        """#35：令牌错误 → rejected=True / identified=False，服务端据此断开且不登记连接"""
+        sa = SatoriAdapter(service)
+        sa.config.token = "secret"
+        result = sa.process_signal(json.dumps({"op": 3, "body": {"token": "wrong"}}))
+        assert result.rejected is True
+        assert result.identified is False
+
+    def test_process_signal_reports_identified(self, service):
+        sa = SatoriAdapter(service)
+        sa.config.token = "secret"
+        result = sa.process_signal(json.dumps({"op": 3, "body": {"token": "secret"}}))
+        assert result.identified is True
+        assert result.rejected is False
+
+    def test_ping_before_identify_does_not_identify(self, service):
+        """IDENTIFY 之前的 PING 只回 PONG，不能让连接进入广播集合"""
+        sa = SatoriAdapter(service)
+        sa.config.token = "secret"
+        result = sa.process_signal(json.dumps({"op": 1}))
+        assert result.identified is False
+        assert result.frames[0]["op"] == 2
+
+    def test_token_getter_takes_precedence_and_is_live(self, service):
+        """令牌每次实时读取：getter 换值后旧令牌立即失效"""
+        current = {"key": "k1"}
+        sa = SatoriAdapter(service)
+        sa.config.token = "static"
+        sa.config.token_getter = lambda: current["key"]
+        assert sa.check_token("k1")
+        assert not sa.check_token("static")
+        current["key"] = "k2"
+        assert not sa.check_token("k1")
+        assert sa.check_token("k2")
+
+    def test_no_token_configured_allows_all(self, service):
+        sa = SatoriAdapter(service)
+        assert sa.check_token(None)
+        assert sa.check_token("anything")
+
     def test_resume_sn_advances_counter(self, service):
         """断线恢复：IDENTIFY 带 sn → 后续事件 sn 接着往下发，不重发旧事件"""
         sa = SatoriAdapter(service)
