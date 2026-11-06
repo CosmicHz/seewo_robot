@@ -255,3 +255,14 @@ class TestOpenApiMatchesImplementation:
             if code is ApiErrorCode.OK:
                 continue
             assert code.value in text, f"OpenAPI 未声明错误码: {code.value}"
+
+
+class TestV2StorageIsolation:
+    """B1 回归：v2 Store 不得与 v1 共用 `chat_history.json`。"""
+
+    def test_v2_store_uses_separate_file(self, api_server):
+        from funcs import chat_log_file
+
+        v2_path = api_server.service.store.path
+        assert v2_path != chat_log_file()
+        assert v2_path.endswith(".v2.json")

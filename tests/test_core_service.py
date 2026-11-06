@@ -492,32 +492,88 @@ class TestStore:
         raw = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
         assert raw["messages"][0]["id"] == "m1"
 
-    def test_json_store_reads_legacy_format(self, tmp_path):
-        """旧 chat_history.json 格式（字段同名）继续可读"""
+    def test_json_store_refuses_v1_file_and_leaves_it_untouched(self, tmp_path):
+        """误把 v1 `chat_history.json` 交给 JsonStore → 拒绝加载，且不改写原文件。
+
+        回归（B1）：此前 v1 记录被读成 `segments=()`（内容丢失），
+        一次 append 就把整份文件写成 v2 结构，v1 再读全是空内容。
+        """
         path = tmp_path / "chat.json"
-        path.write_text(
-            json.dumps(
-                {
-                    "messages": [
-                        {
-                            "id": 1,
-                            "time": "2024-01-01 00:00:00",
-                            "content": "旧消息",
-                            "type": 1,
-                            "sender": "student",
-                            "senderName": "学生",
-                            "resUrl": "",
-                        }
-                    ]
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
+        original = json.dumps(
+            {
+                "messages": [
+                    {
+                        "id": 1,
+                        "time": "2024-01-01 00:00:00",
+                        "content": "旧消息",
+                        "type": 1,
+                        "sender": "student",
+                        "senderName": "学生",
+                        "resUrl": "",
+                    }
+                ]
+            },
+            ensure_ascii=False,
         )
+        path.write_text(original, encoding="utf-8")
         store = JsonStore(str(path))
-        loaded = store.load()
+        with pytest.raises(CorruptStoreError):
+            store.load()
+        with pytest.raises(CorruptStoreError):
+            store.append([Message(id="2", platform="f", timestamp=1)])
+        assert path.read_text(encoding="utf-8") == original
+
+    def test_json_store_roundtrip_preserves_content(self, tmp_path):
+        """v2 结构写入后重新打开，内容与发送者都在（不只是 id）。"""
+        path = str(tmp_path / "chat.v2.json")
+        JsonStore(path).append(
+            [
+                Message(
+                    id="m1",
+                    platform="f",
+                    user_id="u1",
+                    segments=(
+                        Segment.text_seg("你好"),
+                        Segment.image("http://x/a.png"),
+                    ),
+                    timestamp=1,
+                )
+            ]
+        )
+        loaded = JsonStore(path).load()
         assert len(loaded) == 1
-        assert loaded[0].id == "1"
+        assert loaded[0].user_id == "u1"
+        assert loaded[0].segments[0].text == "你好"
+        assert loaded[0].segments[1].url == "http://x/a.png"
+
+    def test_concurrent_load_and_append_do_not_crash(self, tmp_path):
+        """HTTP 线程读历史 + 轮询线程写入并发发生时不应报错（B9）。"""
+        import threading
+
+        store = JsonStore(str(tmp_path / "chat.v2.json"))
+        errors: list[BaseException] = []
+
+        def writer():
+            try:
+                for i in range(200):
+                    store.append([Message(id=f"m{i}", platform="f", timestamp=i)])
+            except BaseException as e:
+                errors.append(e)
+
+        def reader():
+            try:
+                for _ in range(200):
+                    store.load()
+            except BaseException as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=writer), threading.Thread(target=reader)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert errors == []
+        assert len(store.load()) == 200
 
     def test_json_store_corrupt_file_raises(self, tmp_path):
         """损坏文件必须抛错（不吞），避免把损坏当空记录覆盖历史"""

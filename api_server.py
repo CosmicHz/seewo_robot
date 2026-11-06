@@ -261,13 +261,20 @@ class _BoundSeewoProvider(SeewoProvider):
 def _build_service() -> MessageService:
     """构造核心服务。
 
-    Store 直接复用 v1 的 `chat_history.json`（格式兼容），
-    因此 v1 与 v2 看到同一份历史，不会出现两份数据。
+    v2 Store 使用**独立文件**（`chat_history.v2.json`，mock 模式为
+    `chat_history_mock.v2.json`），**不读写** v1 的 `chat_history.json`：
+    两者记录结构不同，共用文件会让 v2 把 v1 历史写成空内容。
+    v1 文件只由 v1 代码路径维护，行为不变。
+
+    注意：路径在服务启动时确定；热重载切换 `use_mock` 不会切换 v2 文件
+    （v1 的 `chat_log_file()` 每次调用实时读取，不受影响）。
     """
     from funcs import chat_log_file
 
+    v1_path = chat_log_file()
+    v2_path = v1_path[: -len(".json")] + ".v2.json"
     provider = _BoundSeewoProvider(session)
-    store = JsonStore(chat_log_file(), cursor_path=chat_log_file() + ".cursor")
+    store = JsonStore(v2_path, cursor_path=v2_path + ".cursor")
     return MessageService(provider, store)
 
 

@@ -3,10 +3,15 @@
 核心服务只依赖本协议，不关心数据落在内存还是磁盘、是不是 JSON 文件。
 两种实现：
 - `MemoryStore`：进程内，测试与轻量场景
-- `JsonStore`：JSON 文件，兼容旧 `chat_history.json` 格式
+- `JsonStore`：JSON 文件，存平台中立的 v2 消息结构
 
-**与旧实现的兼容**：`JsonStore` 读写的就是旧格式
-（`{"messages": [ ... ]}`，消息字段同名），旧文件继续可读，新旧进程可互换。
+**与 v1 的关系**：`JsonStore` **不读写** v1 的 `chat_history.json`。
+v1 文件的记录结构（`content` / 数字 `type` / `sender` / `time`）与 v2 的
+`Message`（`segments` / `role` / `timestamp`）不同，共用同一个文件会让
+v2 把旧记录读成空内容、再以 v2 结构整份写回，v1 随之读到空内容。
+因此 v2 使用**独立文件**（见 `api_server._build_service`），并且
+`JsonStore` 遇到 v1 结构的文件会**拒绝加载**（抛 `CorruptStoreError`），
+防止误配置时覆盖 v1 数据。
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ import abc
 import json
 import os
 import tempfile
+import threading
 from collections.abc import Iterable, Iterator
 
 from ..errors import CorruptStoreError, StoreError
@@ -92,14 +98,15 @@ class MemoryStore(Store):
 
 
 class JsonStore(Store):
-    """JSON 文件实现，兼容旧 `chat_history.json` 格式。
+    """JSON 文件实现（v2 消息结构）。
 
-    格式：``{"messages": [ {消息字段...} ], "cursor": "..."}``
+    格式：``{"messages": [ Message.to_dict(), ... ]}``
 
-    - 旧文件没有 `cursor` 字段 → 视为无游标（不影响读取旧数据）
-    - `cursor` 放在**独立文件**里（由 `cursor_path` 指定），
-      避免与旧格式竞争、也避免每次写消息都重写游标
+    - `cursor` 放在**独立文件**里（由 `cursor_path` 指定），避免每次写消息都重写游标
     - 写文件用「临时文件 + os.replace」保证原子性，避免进程中断留下半个文件
+    - 所有读写由 `_lock` 串行化：HTTP 线程读历史与轮询线程写入可以并发发生
+    - 文件里出现**没有 `segments` 字段**的记录（v1 `chat_history.json` 结构）
+      → 抛 `CorruptStoreError`，不当作空内容加载，更不会写回覆盖
     """
 
     def __init__(self, path: str, cursor_path: str | None = None) -> None:
@@ -107,14 +114,18 @@ class JsonStore(Store):
         self.cursor_path = cursor_path
         self._messages: dict[str, Message] = {}
         self._loaded = False
+        self._lock = threading.RLock()
 
     # —— 内部 ——
 
     def _ensure_loaded(self) -> None:
+        # `_loaded` 只在**解析全部成功后**才置位：若先置位再解析，
+        # 解析失败抛错后下一次调用会拿到空缓存，随后的 append 会把
+        # 原文件整份覆盖 —— 正是「故意不吞损坏」要防的数据丢失。
         if self._loaded:
             return
-        self._loaded = True
         if not os.path.exists(self.path):
+            self._loaded = True
             return
         try:
             with open(self.path, encoding="utf-8") as f:
@@ -131,29 +142,40 @@ class JsonStore(Store):
         raw_messages = data["messages"]
         if not isinstance(raw_messages, list):
             raise CorruptStoreError(f"消息存储文件缺少 messages 列表: {self.path}")
+        loaded: dict[str, Message] = {}
         for item in raw_messages:
             if not isinstance(item, dict):
                 raise CorruptStoreError(f"消息存储文件元素不是对象: {self.path}")
+            if "segments" not in item:
+                raise CorruptStoreError(
+                    f"消息存储文件不是 v2 结构（记录缺少 segments 字段，"
+                    f"疑似 v1 的 chat_history.json）；为避免覆盖 v1 数据拒绝加载: "
+                    f"{self.path}"
+                )
             msg = Message.from_dict(item)
-            self._messages[msg.id] = msg
+            loaded[msg.id] = msg
+        self._messages = loaded
+        self._loaded = True
 
     def _ordered(self) -> list[Message]:
-        self._ensure_loaded()
-        return sorted(self._messages.values(), key=lambda m: m.sort_key)
+        with self._lock:
+            self._ensure_loaded()
+            return sorted(self._messages.values(), key=lambda m: m.sort_key)
 
     # —— Store 接口 ——
 
     def append(self, messages: Iterable[Message]) -> int:
-        self._ensure_loaded()
-        written = 0
-        for msg in messages:
-            if msg.id in self._messages:
-                continue
-            self._messages[msg.id] = msg
-            written += 1
-        if written:
-            self._flush()
-        return written
+        with self._lock:
+            self._ensure_loaded()
+            written = 0
+            for msg in messages:
+                if msg.id in self._messages:
+                    continue
+                self._messages[msg.id] = msg
+                written += 1
+            if written:
+                self._flush()
+            return written
 
     def load(self, limit: int = 0, offset: int = 0) -> tuple[Message, ...]:
         ordered = self._ordered()
@@ -164,8 +186,9 @@ class JsonStore(Store):
         return tuple(ordered)
 
     def contains(self, message_id: str) -> bool:
-        self._ensure_loaded()
-        return message_id in self._messages
+        with self._lock:
+            self._ensure_loaded()
+            return message_id in self._messages
 
     def last_cursor(self) -> str | None:
         if not self.cursor_path or not os.path.exists(self.cursor_path):
@@ -182,7 +205,8 @@ class JsonStore(Store):
         if not self.cursor_path:
             return
         payload = json.dumps({"cursor": cursor}, ensure_ascii=False)
-        _atomic_write(self.cursor_path, payload)
+        with self._lock:
+            _atomic_write(self.cursor_path, payload)
 
     def _flush(self) -> None:
         """原子写盘。"""
@@ -198,8 +222,9 @@ class JsonStore(Store):
 
     def reload(self) -> None:
         """丢弃内存缓存，下次访问重新从磁盘读。"""
-        self._loaded = False
-        self._messages = {}
+        with self._lock:
+            self._loaded = False
+            self._messages = {}
 
 
 def _atomic_write(path: str, content: str) -> None:
