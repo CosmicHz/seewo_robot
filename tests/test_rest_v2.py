@@ -194,14 +194,26 @@ class TestMessages:
         assert resp.status_code == 502
         assert resp.get_json()["error"]["code"] == "upstream"
 
-    def test_count_argument_is_bounded(self, client, auth, provider):
-        """越界的 count 回落到默认值，不报错"""
-        resp = client.get("/api/v2/messages?count=99999", headers=auth)
-        assert resp.status_code == 200
+    def test_out_of_range_count_is_400(self, client, auth, provider):
+        """#5：OpenAPI 声明 count ∈ [1, 200]，越界返回 400，不静默回落默认值"""
+        for bad in ("99999", "0", "-1"):
+            resp = client.get(f"/api/v2/messages?count={bad}", headers=auth)
+            assert resp.status_code == 400, bad
+            assert resp.get_json()["error"]["code"] == "invalid_request"
 
-    def test_invalid_count_falls_back(self, client, auth):
+    def test_non_integer_count_is_400(self, client, auth):
         resp = client.get("/api/v2/messages?count=abc", headers=auth)
-        assert resp.status_code == 200
+        assert resp.status_code == 400
+        assert resp.get_json()["error"]["code"] == "invalid_request"
+
+    def test_count_boundaries_and_default_accepted(self, client, auth):
+        for ok in ("1", "200"):
+            assert (
+                client.get(f"/api/v2/messages?count={ok}", headers=auth).status_code
+                == 200
+            ), ok
+        # 缺省时用默认值
+        assert client.get("/api/v2/messages", headers=auth).status_code == 200
 
 
 # ============================ /history ============================
@@ -413,3 +425,111 @@ class TestSdk:
         with pytest.raises(SeewoApiError) as exc:
             sdk.status()
         assert exc.value.code == "invalid_response"
+
+
+# ============================ 契约收紧（批次 6 回归） ============================
+
+
+class TestRequestValidation:
+    """非法输入必须返回 400 信封，不能 500，也不能静默替换。"""
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            ("post", "/api/v2/messages"),
+            ("post", "/api/v2/sync"),
+            ("post", "/api/v2/connection"),
+        ],
+    )
+    def test_non_object_body_is_400(self, client, auth, method, path):
+        """#4：请求体是数组时返回 invalid_request，而不是 500"""
+        resp = getattr(client, method)(path, headers=auth, json=[1])
+        assert resp.status_code == 400
+        assert resp.get_json()["error"]["code"] == "invalid_request"
+
+    def test_sync_without_body_still_works(self, client, auth):
+        """缺省请求体仍按默认参数执行（兼容既有调用方）"""
+        assert client.post("/api/v2/sync", headers=auth).status_code == 200
+
+    def test_segments_with_non_object_element_is_400(self, client, auth, provider):
+        """#23：混入非对象元素时整条拒绝，不静默丢弃后照发"""
+        resp = client.post(
+            "/api/v2/messages",
+            headers=auth,
+            json={"segments": [1, {"type": "text", "text": "hi"}]},
+        )
+        assert resp.status_code == 400
+        assert provider.sent == ()
+
+    @pytest.mark.parametrize(
+        "query", ["limit=501", "limit=0", "limit=abc", "offset=-1", "offset=x"]
+    )
+    def test_invalid_history_params_are_400(self, client, auth, query):
+        """#5：分页参数非法时返回 400，不回落成默认页"""
+        resp = client.get(f"/api/v2/history?{query}", headers=auth)
+        assert resp.status_code == 400
+        assert resp.get_json()["error"]["code"] == "invalid_request"
+
+
+def _sdk_with_response(status_code, body):
+    from seewo.sdk import SeewoRobotClient
+
+    class FakeResponse:
+        def __init__(self):
+            self.status_code = status_code
+
+        def json(self):
+            return body
+
+    class FakeSession:
+        def request(self, *args, **kwargs):
+            return FakeResponse()
+
+        def close(self):
+            pass
+
+    return SeewoRobotClient(base_url="http://test", session=FakeSession())
+
+
+class TestSdkContract:
+    @pytest.mark.parametrize("body", [{}, None, [], {"data": {"id": "x"}}])
+    def test_non_envelope_200_is_not_success(self, body):
+        """#8：HTTP 200 但不是统一信封 → invalid_response，不能当发送成功"""
+        from seewo.sdk import SeewoApiError
+
+        sdk = _sdk_with_response(200, body)
+        with pytest.raises(SeewoApiError) as exc:
+            sdk.send_text("hi")
+        assert exc.value.code == "invalid_response"
+
+    def test_network_error_is_wrapped(self):
+        """#7：网络异常统一为 SeewoApiError，原始异常保留为 __cause__"""
+        import requests
+
+        from seewo.sdk import SeewoApiError, SeewoRobotClient
+
+        class BrokenSession:
+            def request(self, *args, **kwargs):
+                raise requests.ConnectionError("refused")
+
+            def close(self):
+                pass
+
+        sdk = SeewoRobotClient(base_url="http://test", session=BrokenSession())
+        with pytest.raises(SeewoApiError) as exc:
+            sdk.status()
+        assert exc.value.code == "network"
+        assert isinstance(exc.value.__cause__, requests.ConnectionError)
+
+    def test_status_code_alias(self):
+        """#6：MIGRATION.md 文档化的 `.status_code` 可用，且与 `.status` 一致"""
+        from seewo.sdk import SeewoApiError
+
+        sdk = _sdk_with_response(
+            401,
+            {"status": "error", "error": {"code": "unauthorized", "message": "x"}},
+        )
+        with pytest.raises(SeewoApiError) as exc:
+            sdk.status()
+        assert exc.value.status_code == 401
+        assert exc.value.status == 401

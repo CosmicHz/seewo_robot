@@ -466,11 +466,13 @@ class Event:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Event:
-        raw_type = d.get("type", EventType.MESSAGE.value)
+        # 未知类型**拒绝**而非回落 MESSAGE：否则 error 之类的事件
+        # 会被下游当成「收到一条新消息」处理。
+        raw_type = d.get("type")
         try:
             etype = EventType(raw_type)
-        except ValueError:
-            etype = EventType.MESSAGE
+        except ValueError as e:
+            raise ValueError(f"未知事件类型: {raw_type!r}") from e
         msg_raw = d.get("message")
         data = d.get("data")
         return cls(

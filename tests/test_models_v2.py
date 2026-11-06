@@ -184,8 +184,12 @@ class TestEvent:
         assert d["error"] == "boom"
         assert "message" not in d
 
-    def test_unknown_type_falls_back(self):
-        assert Event.from_dict({"type": "nope"}).type is EventType.MESSAGE
+    def test_unknown_type_is_rejected(self):
+        # #24：未知类型不得被当成 MESSAGE（否则 error 事件会被误当新消息）
+        with pytest.raises(ValueError):
+            Event.from_dict({"type": "nope"})
+        with pytest.raises(ValueError):
+            Event.from_dict({"message": {"id": "m1"}})
 
 
 # ============================ 能力 ============================

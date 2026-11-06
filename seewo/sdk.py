@@ -46,6 +46,11 @@ class SeewoApiError(Exception):
         self.status = status
         self.details = details or {}
 
+    @property
+    def status_code(self) -> int:
+        """HTTP 状态码（`status` 的别名，与 docs/MIGRATION.md 一致）。"""
+        return self.status
+
 
 @dataclass(frozen=True, slots=True)
 class SendResult:
@@ -106,9 +111,14 @@ class SeewoRobotClient:
     def _request(self, method: str, endpoint: str, **kwargs) -> Any:
         """发请求并解包统一响应信封。"""
         url = f"{self.base_url}/api/v2{endpoint}"
-        response = self.session.request(
-            method, url, headers=self._headers(), timeout=self.timeout, **kwargs
-        )
+        try:
+            response = self.session.request(
+                method, url, headers=self._headers(), timeout=self.timeout, **kwargs
+            )
+        except requests.RequestException as e:
+            # 网络层失败（连不上 / 超时）也统一成 SeewoApiError，
+            # 调用方只需捕获一种异常；原始异常保留在 __cause__。
+            raise SeewoApiError("network", f"请求失败: {e}") from e
         try:
             body = response.json()
         except (json.JSONDecodeError, ValueError):
@@ -118,8 +128,18 @@ class SeewoRobotClient:
                 status=response.status_code,
             ) from None
 
-        if response.status_code >= 400 or body.get("status") == "error":
-            error = body.get("error") or {}
+        if not isinstance(body, dict) or body.get("status") not in ("ok", "error"):
+            # 不是统一信封：不能当成功（例如 `{}` 曾被误判为发送成功）
+            raise SeewoApiError(
+                "invalid_response",
+                f"服务端响应不是统一信封 (HTTP {response.status_code})",
+                status=response.status_code,
+            )
+
+        if response.status_code >= 400 or body["status"] == "error":
+            error = body.get("error")
+            if not isinstance(error, dict):
+                error = {}
             raise SeewoApiError(
                 error.get("code", "internal"),
                 error.get("message", "未知错误"),
@@ -141,7 +161,7 @@ class SeewoRobotClient:
         return self._request("GET", "/capabilities")
 
     def messages(self, count: int = 20) -> list[Message]:
-        """拉取最新消息（实时，不落库）。"""
+        """实时拉取最新消息，返回**新接收**的消息（服务端去重后落入 v2 存储）。"""
         data = self._request("GET", "/messages", params={"count": count})
         return [Message.from_dict(m) for m in (data or {}).get("messages", [])]
 

@@ -254,18 +254,28 @@ class ApiV2:
         return ok_response(self.service.capabilities.to_dict())
 
     def messages(self):
-        """拉取最新消息（实时，不落库）。
+        """实时向平台拉取最新消息并接收（去重 + 有序）。
 
-        Query: ``count``（默认 20，上限 200）
+        **新消息会写入 v2 本地存储**（去重后只落一次），之后可经
+        ``/api/v2/history`` 查到。返回的是本次**新接收**的消息。
+
+        Query: ``count``（缺省 20，取值 1–200；非法值 → 400）
         """
         err = self._authorize()
         if err:
             return error_response(err)
         from flask import request
 
-        count = _int_arg(
-            request.args.get("count", 20), default=20, minimum=1, maximum=200
-        )
+        try:
+            count = _int_arg(
+                request.args.get("count"),
+                name="count",
+                default=20,
+                minimum=1,
+                maximum=200,
+            )
+        except ValueError as e:
+            return _invalid(e)
         try:
             accepted = self.service.poll_once(limit=count)
         except SeewoError as e:
@@ -283,17 +293,27 @@ class ApiV2:
     def history(self):
         """读历史消息（有序）。
 
-        Query: ``limit``（默认 50，上限 500）、``offset``
+        Query: ``limit``（缺省 50，取值 1–500）、``offset``（缺省 0，≥0）；
+        非法值 → 400（不静默回落默认值）。
         """
         err = self._authorize()
         if err:
             return error_response(err)
         from flask import request
 
-        limit = _int_arg(
-            request.args.get("limit", 50), default=50, minimum=1, maximum=500
-        )
-        offset = _int_arg(request.args.get("offset", 0), default=0, minimum=0)
+        try:
+            limit = _int_arg(
+                request.args.get("limit"),
+                name="limit",
+                default=50,
+                minimum=1,
+                maximum=500,
+            )
+            offset = _int_arg(
+                request.args.get("offset"), name="offset", default=0, minimum=0
+            )
+        except ValueError as e:
+            return _invalid(e)
         messages = self.service.history(limit=limit, offset=offset)
         return ok_response(
             {
@@ -321,8 +341,11 @@ class ApiV2:
             return error_response(err)
         from flask import request
 
-        data = request.get_json(silent=True) or {}
-        segments = _parse_segments(data)
+        try:
+            data = _json_object(request)
+            segments = _parse_segments(data)
+        except ValueError as e:
+            return _invalid(e)
         if not segments:
             return error_response(
                 ApiError(
@@ -351,8 +374,13 @@ class ApiV2:
             return error_response(err)
         from flask import request
 
-        data = request.get_json(silent=True) or {}
-        limit = _int_arg(data.get("limit", 50), default=50, minimum=1, maximum=200)
+        try:
+            data = _json_object(request)  # 缺省请求体 → {}
+            limit = _int_arg(
+                data.get("limit"), name="limit", default=50, minimum=1, maximum=200
+            )
+        except ValueError as e:
+            return _invalid(e)
         try:
             accepted = self.service.poll_once(limit=limit)
         except SeewoError as e:
@@ -413,7 +441,10 @@ class ApiV2:
             return error_response(err)
         from flask import request
 
-        data = request.get_json(silent=True) or {}
+        try:
+            data = _json_object(request)
+        except ValueError as e:
+            return _invalid(e)
         action = str(data.get("action", "")).lower()
         try:
             if action == "connect":
@@ -443,19 +474,54 @@ class ApiV2:
 # ---------------------------------------------------------------------------
 
 
+def _invalid(exc: Exception):
+    """参数校验失败 → 400 invalid_request。"""
+    return error_response(ApiError(ApiErrorCode.INVALID_REQUEST, str(exc)))
+
+
+class InvalidRequest(ValueError):
+    """请求参数/请求体不合法 → ``400 invalid_request``。
+
+    继承 `ValueError`，因此各端点统一的 ``except ValueError`` 分支照常接住。
+    """
+
+
 def _int_arg(
-    raw: Any, *, default: int, minimum: int | None = None, maximum: int | None = None
+    raw: Any,
+    *,
+    name: str,
+    default: int,
+    minimum: int | None = None,
+    maximum: int | None = None,
 ) -> int:
-    """解析整数参数，非法值回落到 default。"""
+    """解析整数参数。
+
+    **只在参数缺省（None / 空串）时使用 default**；格式错误或越界抛
+    `ValueError` —— 不静默替换成默认值，避免调用方拿到「看似成功」的错误页。
+    """
+    if raw is None or raw == "":
+        return default
+    if isinstance(raw, bool):
+        raise InvalidRequest(f"{name} 必须是整数")
     try:
         value = int(raw)
     except (TypeError, ValueError):
-        return default
+        raise ValueError(f"{name} 必须是整数，收到 {raw!r}") from None
     if minimum is not None and value < minimum:
-        return default
+        raise ValueError(f"{name} 不能小于 {minimum}，收到 {value}")
     if maximum is not None and value > maximum:
-        return default
+        raise ValueError(f"{name} 不能大于 {maximum}，收到 {value}")
     return value
+
+
+def _json_object(request: Any) -> dict[str, Any]:
+    """取请求体 JSON 对象。缺省请求体视为 ``{}``；非对象（数组/标量）抛 `ValueError`。"""
+    data = request.get_json(silent=True)
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise InvalidRequest("请求体必须是 JSON 对象")
+    return data
 
 
 def _parse_segments(data: dict[str, Any]) -> tuple[Segment, ...]:
@@ -466,8 +532,14 @@ def _parse_segments(data: dict[str, Any]) -> tuple[Segment, ...]:
     - ``{"content": "文本"}`` —— 简写
     """
     raw_segments = data.get("segments")
-    if isinstance(raw_segments, list) and raw_segments:
-        return tuple(Segment.from_dict(s) for s in raw_segments if isinstance(s, dict))
+    if raw_segments is not None and not isinstance(raw_segments, list):
+        raise ValueError("segments 必须是数组")
+    if raw_segments:
+        # 整个数组先校验：含非对象元素时拒绝，不静默丢弃后发送剩余部分
+        for i, s in enumerate(raw_segments):
+            if not isinstance(s, dict):
+                raise InvalidRequest(f"segments[{i}] 必须是对象")
+        return tuple(Segment.from_dict(s) for s in raw_segments)
     content = data.get("content")
     if isinstance(content, str) and content:
         return (Segment.text_seg(content),)
