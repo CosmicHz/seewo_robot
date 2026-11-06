@@ -215,6 +215,10 @@ class _BoundSeewoProvider(SeewoProvider):
 
         sess = self._session
         if sess.stu_msg is None or sess.account is None:
+            # 与 v1 `_check_session()` 一致：按需加载已缓存的 tokens.json。
+            # `auto_login=False`，凭证无效时不会阻塞扫码，只是保持未就绪。
+            sess.init()
+        if sess.stu_msg is None or sess.account is None:
             raise ProviderConnectionError(
                 "希沃会话尚未初始化，请先完成登录", retryable=False
             )
@@ -860,6 +864,15 @@ onebot_server = OneBot11Server(onebot_adapter, app)
 #: Satori 适配器 —— 供 Koishi / AIRI 等接入
 satori_adapter = SatoriAdapter(service, _protocol_config())
 satori_server = SatoriServer(satori_adapter, app)
+
+#: 让两个适配器订阅核心事件（不连接平台，冷启动无会话也不报错）。
+#: 此前从未订阅，WS 客户端连上后永远收不到消息事件。
+#:
+#: 注意：本服务**没有后台轮询**。入站消息只在有人调用
+#: `/api/v2/sync` 或 `GET /api/v2/messages` 时产生，届时才会推送给 WS 客户端；
+#: 需要持续接收时由外部调度器定时调用 `/api/v2/sync`（频率自行控制，防风控）。
+onebot_adapter.subscribe()
+satori_adapter.subscribe()
 
 #: WebSocket 端点挂在**同一个** Flask app 上（flask-sock 以蓝图方式注册路由），
 #: 因此 HTTP 与 WS 共用 `api_port`，不需要另开端口。

@@ -266,3 +266,69 @@ class TestV2StorageIsolation:
         v2_path = api_server.service.store.path
         assert v2_path != chat_log_file()
         assert v2_path.endswith(".v2.json")
+
+
+class TestAdaptersWired:
+    """B2 回归：api_server 必须让两个适配器订阅核心事件。"""
+
+    @pytest.mark.parametrize("name", ["onebot_adapter", "satori_adapter"])
+    def test_core_event_reaches_registered_connection(self, api_server, name):
+        """核心派发事件 → 已登记的连接收到（不连接平台、不触发轮询）。"""
+        from seewo.models import Event, EventType, Message, Segment
+
+        adapter = getattr(api_server, name)
+
+        class Conn:
+            def __init__(self):
+                self.frames = []
+
+            def send(self, frame):
+                self.frames.append(frame)
+
+        conn = Conn()
+        adapter.register_connection(conn)
+        try:
+            api_server.service._dispatch(
+                Event(
+                    type=EventType.MESSAGE,
+                    message=Message(
+                        id="wired-1",
+                        platform="seewo",
+                        segments=(Segment.text_seg("hi"),),
+                        timestamp=1,
+                    ),
+                    timestamp=1,
+                )
+            )
+        finally:
+            adapter.unregister_connection(conn)
+        assert len(conn.frames) == 1
+
+
+class TestColdStartBinding:
+    """#11 回归：v2 首个请求前若会话未初始化，应先按需 `session.init()`。"""
+
+    def test_bind_initialises_session_on_demand(self, api_server, monkeypatch):
+        sess = api_server.Session()
+        calls = []
+
+        def fake_init():
+            calls.append(1)
+            sess.account = object()
+            sess.student = object()
+            sess.stu_msg = object()
+            return sess
+
+        monkeypatch.setattr(sess, "init", fake_init)
+        provider = api_server._BoundSeewoProvider(sess)
+        _, _, stu_msg = provider._bind()
+        assert calls == [1]
+        assert stu_msg is sess.stu_msg
+
+    def test_bind_still_fails_when_no_valid_token(self, api_server, monkeypatch):
+        from seewo.errors import ProviderConnectionError
+
+        sess = api_server.Session()
+        monkeypatch.setattr(sess, "init", lambda: sess)
+        with pytest.raises(ProviderConnectionError):
+            api_server._BoundSeewoProvider(sess)._bind()

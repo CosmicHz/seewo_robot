@@ -89,6 +89,7 @@ class IntegrationServer:
         self._cursor: str | None = None
         self._threads: list[threading.Thread] = []
         self._state_lock = threading.Lock()
+        self._subscribed = False
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -98,8 +99,19 @@ class IntegrationServer:
         """启动服务（连接核心、订阅事件、启动后台线程）。"""
         self._stop.clear()
         self.service.connect()
-        self.service.on_any(self._on_core_event)
+        self.subscribe()
         self._start_background()
+
+    def subscribe(self) -> None:
+        """订阅核心事件（幂等），**不**连接平台。
+
+        供宿主在平台会话尚未就绪时先挂上事件出口：之后任何入站/出站事件
+        都会推给已认证的连接。
+        """
+        if self._subscribed:
+            return
+        self.service.on_any(self._on_core_event)
+        self._subscribed = True
 
     def stop(self) -> None:
         """停止服务，释放资源。"""
@@ -113,6 +125,9 @@ class IntegrationServer:
             self._connections.clear()
         for conn in connections:
             self._safe_close(conn)
+        if self._subscribed:
+            self.service.off_any(self._on_core_event)
+            self._subscribed = False
         try:
             self.service.disconnect()
         except Exception as e:

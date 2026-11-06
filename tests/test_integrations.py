@@ -639,3 +639,64 @@ def _attach_capture(service, captured):
     """把捕获列表挂到 service 上，供 `_captured()` 取用。"""
     service._captured_events = captured
     yield
+
+
+class TestSubscribeWithoutConnect:
+    """B2 回归：适配器必须订阅核心事件，WS 客户端才能收到消息。
+
+    `subscribe()` 只挂事件出口，不连接平台 —— 宿主冷启动时会话可能尚未就绪。
+    """
+
+    class _Conn:
+        def __init__(self):
+            self.frames = []
+
+        def send(self, frame):
+            self.frames.append(frame)
+
+    def test_subscribed_adapter_pushes_message_events(self, service, provider):
+        ob = OneBot11Adapter(service)
+        conn = self._Conn()
+        ob.register_connection(conn)
+        ob.subscribe()
+        provider.emit_text("hi", message_id="m1")
+        service.poll_once()
+        assert [
+            f["message_id"] for f in conn.frames if f.get("post_type") == "message"
+        ] == ["m1"]
+
+    def test_unsubscribed_adapter_pushes_nothing(self, service, provider):
+        ob = OneBot11Adapter(service)
+        conn = self._Conn()
+        ob.register_connection(conn)
+        provider.emit_text("hi", message_id="m1")
+        service.poll_once()
+        assert conn.frames == []
+
+    def test_subscribe_is_idempotent(self, service, provider):
+        ob = OneBot11Adapter(service)
+        conn = self._Conn()
+        ob.register_connection(conn)
+        ob.subscribe()
+        ob.subscribe()
+        provider.emit_text("hi", message_id="m1")
+        service.poll_once()
+        assert len([f for f in conn.frames if f.get("post_type") == "message"]) == 1
+
+    def test_subscribe_does_not_connect_provider(self):
+        # 用独立 provider：共享 fixture 的 provider 已被 `service` fixture connect 过
+        fresh = FakeProvider()
+        svc = MessageService(fresh, MemoryStore())
+        OneBot11Adapter(svc).subscribe()
+        assert fresh.connect_calls == 0
+
+    def test_stop_unsubscribes(self, service, provider):
+        ob = OneBot11Adapter(service)
+        conn = self._Conn()
+        ob.subscribe()
+        ob.stop()
+        ob.register_connection(conn)
+        provider.emit_text("hi", message_id="m1")
+        service.connect()
+        service.poll_once()
+        assert [f for f in conn.frames if f.get("post_type") == "message"] == []
