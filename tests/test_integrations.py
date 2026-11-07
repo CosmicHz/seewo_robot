@@ -860,3 +860,22 @@ class TestSatoriHttpServer:
         resp = client.post("/satori/v1/message.create", json={"channel_id": "c1"})
         assert resp.status_code == 400
         assert "error" in resp.get_json()
+
+
+class TestOneBotUnknownSegmentRoundtrip:
+    def test_unknown_segment_preserves_original_type(self, service):
+        """未识别段（如 face）转回 OneBot 事件时保留原类型，不臆造成空文本。"""
+        ob = OneBot11Adapter(service)
+        msg = ob.parse_incoming(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "message_id": 1,
+                "user_id": "u1",
+                "message": [{"type": "face", "data": {"id": "1"}}],
+                "time": 100,
+            }
+        )
+        assert msg.segments[0].type is SegmentType.UNKNOWN
+        encoded = ob._segment_to_onebot(msg.segments[0])
+        assert encoded == {"type": "face", "data": {"id": "1"}}

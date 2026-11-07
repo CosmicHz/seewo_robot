@@ -235,6 +235,11 @@ class OneBot11Adapter(IntegrationServer):
     @staticmethod
     def _segment_to_onebot(seg: Segment) -> dict[str, Any]:
         """平台中立段 → OneBot 11 段。"""
+        if seg.type is SegmentType.UNKNOWN:
+            # 未识别段：还原原始 OneBot 类型（见 `_parse_segments`），不臆造成文本
+            ob_type = str(seg.data.get("onebotType") or "text")
+            data = {k: v for k, v in seg.data.items() if k != "onebotType"}
+            return {"type": ob_type, "data": data}
         ob_type = _SEGMENT_TO_ONEBOT.get(seg.type, "text")
         data: dict[str, Any] = {}
         if seg.type is SegmentType.TEXT:
@@ -313,6 +318,13 @@ class OneBot11Adapter(IntegrationServer):
                 )
             elif seg_type is SegmentType.QUOTE:
                 segments.append(Segment.quote(str(data.get("id", ""))))
+            elif seg_type is SegmentType.UNKNOWN:
+                # 未识别的段：保留原始类型与数据，转回事件时不丢失
+                segments.append(
+                    Segment(
+                        type=seg_type, data={"onebotType": item.get("type", ""), **data}
+                    )
+                )
             else:
                 segments.append(
                     Segment(

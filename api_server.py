@@ -251,9 +251,11 @@ class _BoundSeewoProvider(SeewoProvider):
         self._sync_binding()
         return super().poll(cursor=cursor, limit=limit)
 
-    def send(self, outgoing):
+    def _send(self, outgoing):
+        # 覆写的是模板方法里的钩子 `_send`（能力闸门已在 `Provider.send()` 中执行），
+        # **不要**覆写 `send()` —— 那会绕过闸门。
         self._sync_binding()
-        return super().send(outgoing)
+        return super()._send(outgoing)
 
     def _sync_binding(self) -> None:
         """会话可能被 refresh() 换掉，每次操作前重新绑定。"""
