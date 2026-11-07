@@ -45,7 +45,7 @@ Seewo 班牌机器人是一个对接**希沃云班**小程序的聊天工具。�
 
 详见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
-> **兼容性**：v1 的 `/api/*` 响应格式与行为**完全不变**，新能力全部以 `/api/v2/*` 与协议端点**增量**提供，现有客户端无需修改。
+> **兼容性**：v1 的 `/api/*` 响应格式与行为不变，现有 v1 客户端无需修改。v2 与协议端点有破坏性调整（必须带令牌、非法参数返回 400、存储改用独立文件），见 [`docs/MIGRATION.md`](docs/MIGRATION.md)。
 
 ## 环境要求
 
@@ -510,7 +510,7 @@ with SeewoRobotClient(base_url="http://localhost:5001", api_key="xxx") as c:
     c.send([Segment.text_seg("你好"), Segment.image("https://.../a.png")])
 ```
 
-> v2 SDK 的图片/音频方法**只接受 URL**，不做本地文件上传 —— 上传是平台能力，交给调用方决定。
+> v2 SDK 不做本地文件上传。**当前希沃 Provider 在 v2 下不支持媒体发送**（能力表 `send_image/send_audio=false`，调用返回 `501 capability`），发图片/音频请用 v1 的 `/api/send_image` / `/api/send_audio`。
 
 ---
 
@@ -527,7 +527,9 @@ with SeewoRobotClient(base_url="http://localhost:5001", api_key="xxx") as c:
 
 框架选型与逐帧接入说明见 [`docs/INTEGRATION.md`](docs/INTEGRATION.md)。
 
-> ⚠️ `config.json` 的 `api_key` **只保护 v1/v2 REST**。OneBot 11 端点当前无鉴权，生产部署请用反向代理或网络隔离。
+> 🔐 协议端点复用 `config.json` 的 `api_key` 鉴权：OneBot 用 `Authorization: Bearer <api_key>` 或 `?access_token=<api_key>`，Satori 用 `Authorization: Bearer <api_key>`（WS 在 IDENTIFY 的 `token` 中提供）。
+>
+> 本服务**没有后台轮询**：需要持续收消息时，由外部定时调用 `POST /api/v2/sync`（频率自行控制，防风控）。
 
 ---
 
@@ -555,6 +557,8 @@ with SeewoRobotClient(base_url="http://localhost:5001", api_key="xxx") as c:
 | `tokens.json` | 登录凭证（扫码后生成，包含家长 UID、token 等） | 两条路径（共享，注意写冲突） |
 | `chat_history.json` | **真实**聊天记录持久化 | 两条路径（`use_mock=false` 时） |
 | `chat_history_mock.json` | **Mock 模式**聊天记录 | Mock（`use_mock=true` 时自动切换，隔离真实数据） |
+| `chat_history.v2.json` | v2 服务的消息存储（与 v1 独立） | 路径 B 的 `/api/v2/*` 与协议端点 |
+| `chat_history*.v2.json.cursor` | v2 的游标文件 | 同上 |
 | `uploads.json` | 上传到希沃云盘的文件记录 | 两条路径 |
 | `mock_data.json` | Mock 服务器持久化数据（调用 `/mock/save` 时生成） | Mock |
 | `qrcode.png` | 登录时生成的二维码图片 | 两条路径 |
@@ -675,7 +679,9 @@ seewo_robot/
 ## 已知问题
 
 - ⚠️ **uploads.json 按纯文件名做 key，同名覆盖**：写入逻辑在 [upload.py#L121-L122](upload.py#L121-L122)，key 只取 `os.path.basename(file)`，不区分完整路径、不区分家长账号。同一个 basename 的文件重复上传（哪怕路径不同、账号不同、内容不同），后写的都会直接覆盖前一条。**影响范围有限**：主业务链路（上传 → 发送留言）走内存中的 `downloadUrl`，不读这份台账，因此不会导致发错、漏发；只会影响"事后手动打开 uploads.json 按文件名翻历史上传 URL"的查询场景。
-- ⚠️ **OneBot 11 / Satori 协议端点无鉴权**：`config.json` 的 `api_key` 只保护 v1/v2 REST。OneBot 11 的 HTTP（`/onebot/v11/*`）与 WS（`/onebot/v11/ws`）端点**不做任何凭据校验**；Satori 只有 WS 层的 `IDENTIFY.token` 校验，HTTP API 无校验。**生产部署请用反向代理或网络隔离**，不要把这些端点直接暴露到公网。
+- ⚠️ **协议端点与 v2 共用 `api_key`**：`api_key` 为空串时 v2 与协议端点全部放行。服务默认监听 `0.0.0.0`，请务必设置非默认的 `api_key`，不要直接暴露到公网。
+- ⚠️ **v2 / 协议端点不能发媒体**：未接上传器（避免已鉴权客户端借此上传服务端任意本地文件），媒体请走 v1 端点。
+- ⚠️ **v2 没有后台轮询**：WS 客户端只在有人调用 `/api/v2/sync` 或 `GET /api/v2/messages` 后才收到新消息事件。
 - ⚠️ **WebSocket 端点依赖 Werkzeug 开发服务器**：`flask-sock` 在 `app.run()` 下工作正常，但生产部署需换成支持 WS 的 WSGI 服务器（如 gunicorn + gevent），否则 WS 端点会握手失败（HTTP 端点不受影响）。
 - ℹ️ **希沃协议相关能力存在缺口**：撤回、提及、引用、视频/文件发送、流式推送均未实现 —— 不是遗漏，是**协议层不具备或未验证**。完整清单见 [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md)。
 

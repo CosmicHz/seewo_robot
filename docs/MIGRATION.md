@@ -2,11 +2,14 @@
 
 ## 0. 结论先行
 
-> **本次改造零破坏性变更。**
+> **v1 零破坏性变更；v2 / 协议端点有破坏性调整。**
 >
-> v1 的 `/api/*` 响应格式、行为、状态码**全部保持不变**；v2 是**新增**的 `/api/v2/*`，与 v1 并存。
->
-> 现有客户端（`client.py` / `tui_client.py` / `test/test_api.py`）**不需要任何修改**即可继续工作。
+> - **v1**：`/api/*` 的响应格式、行为、状态码全部保持不变；现有 `client.py` / `tui_client.py` / `test/test_api.py` 不需要任何修改。
+> - **v2 / OneBot / Satori**：以下行为已收紧，接入方需要适配 ——
+>   1. **必须携带令牌**：复用 `config.json:api_key`。OneBot 用 `Authorization: Bearer` 或 `?access_token=`（缺失 401，不符 403）；Satori HTTP 用 `Authorization: Bearer`（401）；Satori WS 在 `IDENTIFY.token` 中提供。
+>   2. **非法参数返回 400 `invalid_request`**：`count`/`limit`/`offset` 越界或非整数、请求体不是 JSON 对象、`segments` 含非对象元素。
+>   3. **v2 历史写入独立文件** `chat_history.v2.json`，不再与 v1 的 `chat_history.json` 共用。
+>   4. v2 的已发送消息 `id` 为空串（希沃不返回服务端 id）；OneBot `send_msg` 的 `message_id` 为 `null`。
 
 ---
 
@@ -232,12 +235,12 @@ with SeewoRobotClient(base_url="http://localhost:5001", api_key="xxx") as c:
 
 | | `client.py` | `seewo.sdk` |
 | --- | --- | --- |
-| 发送图片 | `send_image("./本地路径.png")` —— 内部上传 | `send_image("https://.../a.png")` —— **只接受 URL** |
+| 发送图片 | `send_image("./本地路径.png")` —— 内部上传 | v2 当前**不支持媒体发送**（`501 capability`），媒体请走 v1 端点 |
 | 长文本 | 服务端按 `strategy` 截断/拆分 | 不处理，交给调用方 |
 | 错误 | 返回 dict，看 `status` 字段 | 抛 `SeewoApiError`，带 `.code` / `.status_code` |
 | 返回类型 | dict | 类型化的 `Message` / `SendResult` |
 
-> **v2 SDK 只收 URL**，不再代劳文件上传 —— 上传是平台能力，不该由通用 SDK 猜。希沃的上传链路在 v1 SDK 与 `upload.py` 里，仍然可用。
+> **v2 SDK 不做文件上传**；并且服务的 v2 Provider 未接上传器（接上会让已鉴权客户端指定服务端任意本地文件上传到希沃云），因此 `send_image` / `send_audio` 在 v2 下返回 `501 capability`。发媒体请用 v1 的 `/api/send_image` / `/api/send_audio`。
 
 ---
 
@@ -253,7 +256,8 @@ with SeewoRobotClient(base_url="http://localhost:5001", api_key="xxx") as c:
 | --- | --- |
 | v1 响应格式不变 | 既有测试全绿（`tests/test_api_*.py`） |
 | v1 行为不变 | 同上 |
-| 旧 `chat_history.json` 可读 | `JsonStore` 沿用 `{"messages": [...]}` 格式；`tests/test_core_service.py` 有专门用例 |
+| v1 的 `chat_history.json` 不被 v2 改写 | v2 使用独立 `chat_history.v2.json`；`JsonStore` 遇到 v1 结构拒绝加载（`CorruptStoreError`），原文件不动。`tests/test_core_service.py` 有回归用例 |
+| v2 历史不导入 v1 旧记录 | v2 历史从空开始；旧记录到 v2 结构的映射涉及 sender/type 语义，本次不做（未验证不放宽） |
 | v1 的 `merge_messages` 不去重的既有行为保留 | 既有测试锁定（v2 的去重在核心层，不影响 v1） |
 | `Message.type` 容忍 `int \| str` | 既有测试锁定（旧数据里两种都有） |
 

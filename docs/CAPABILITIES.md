@@ -50,10 +50,14 @@
 | `max_text_length` | `199` | 服务端硬上限 200 字（超长返回 `statusCode=40000` / "留言内容不能超过200字符"），客户端留 1 字余量 |
 | `supports_receipt` | `true` | 响应体 `statusCode` 即业务确认 |
 | `supports_recall` | `false` | 协议层有 `DELETE_KIDNOTE_V1_NOTE`，但**本项目未开放**该能力 |
-| `supports_history` | `true` | `GET_KIDNOTE_V1_BYPARENTUID_BYCHILDUID_NOTES` 可翻页取历史 |
+| `supports_history` | `false` | `Provider.history()`（平台侧回溯）未实现，如实申报。本地历史由核心层 Store 提供（`/api/v2/history`），不经 Provider |
 | `supports_stream` | `false` | 希沃是**轮询式**，无推送通道 |
 
 > `send_image` / `send_audio` 是**条件能力**：注入 `uploader` 后变为 `true`。这是有意的 —— 能力申报反映「当前这个 Provider 实例**实际**能做什么」，而不是「协议理论上支持什么」。
+>
+> **当前 `api_server` 没有给 v2 Provider 注入上传器**：上传器接受服务端本地文件路径，经 HTTP/协议端点暴露等于让已鉴权调用方把服务器上任意可读文件传到希沃云端。因此 v2 与 OneBot/Satori 下的媒体发送如实申报 `false`，调用返回 `501 capability`。**发媒体请走 v1 的 `/api/send_image` / `/api/send_audio`**。
+>
+> 即便注入上传器，以下组合也会被拒（协议行为未验证，不猜测）：文本+媒体混发、一条消息含多个媒体、媒体 URL 不是服务端本地文件路径。
 
 ---
 

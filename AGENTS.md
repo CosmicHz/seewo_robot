@@ -147,7 +147,7 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 5. 平台没有的能力 → `capabilities` 申报 `False` + 抛 `CapabilityError`，**不伪造、不静默**
 6. 事件派发必须串行（`_dispatch_lock`），保证事件序 == 消息序
 7. v1 `/api/*` 响应格式与行为**保持不变**
-8. `chat_history.json` 旧格式继续可读
+8. v2 **不读写** v1 的 `chat_history.json`：v2 用独立的 `chat_history.v2.json`，`JsonStore` 遇到 v1 结构拒绝加载（防覆盖）
 
 ### 架构守卫（自动化）
 
@@ -159,12 +159,12 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 | --- | --- | --- |
 | `models.py` | 平台中立模型 | `Segment`（`type` 判别 + 扁平字段）、`Message`（`sort_key` = `(timestamp, id)`）、`User`/`Conversation`/`Event`/`PlatformCapabilities`/`ConnectionState`（显式跃迁表）。平台细节只能进 `Segment.data` / `Message.native` |
 | `errors.py` | 异常体系 | 平台错误码在 Provider 边界被翻译成中立语义（认证失效/业务拒绝/连接失败/超时）。`CapabilityError.capability` 指出具体是哪个能力字段不满足 |
-| `provider/base.py` | Provider 契约 | 平台接入的**唯一**扩展点。`poll(cursor, limit)` 游标语义由 Provider 自己定义（希沃用页码，Satori 用 `sn`）。`CallbackProvider` 供推送式平台 |
-| `core/store.py` | 持久化 | `Store` ABC / `MemoryStore` / `JsonStore`。`JsonStore` 沿用旧 `{"messages":[...]}` 格式；原子写（`mkstemp` + `os.replace`）；缺 `messages` 键抛 `CorruptStoreError`（**故意不吞**） |
+| `provider/base.py` | Provider 契约 | 平台接入的**唯一**扩展点。`poll(cursor, limit)` 游标语义由 Provider 自己定义（希沃无增量游标，返回 `None`）。`CallbackProvider` 供推送式平台 |
+| `core/store.py` | 持久化 | `Store` ABC / `MemoryStore` / `JsonStore`。`JsonStore` 存 v2 记录、容器仍是 `{"messages":[...]}`；所有读写加锁；原子写（`mkstemp` + `os.replace`）；缺 `messages` 键抛 `CorruptStoreError`，遇到缺 `segments` 的 v1 结构同样拒绝加载（**故意不吞**） |
 | `core/service.py` | 通用业务中枢 | 双层去重（LRU + Store）、复合排序键、游标持久化、`_ingest_lock` 串行化拉取、`_dispatch_lock` 串行化派发、认证自愈（刷新后**重试恰好一次**） |
-| `providers/seewo.py` | 希沃适配 | **唯一**允许出现希沃专有符号的地方。数字 type → `SegmentType`；业务码 → Provider 异常；游标 = 1-based 页码；媒体先上传拿 `downloadUrl` |
+| `providers/seewo.py` | 希沃适配 | **唯一**允许出现希沃专有符号的地方。数字 type → `SegmentType`；业务码 → Provider 异常；每次 poll 固定拉第 1 页（不提供游标）；媒体只接受服务端本地文件路径，文本+媒体 / 多媒体混发抛 `CapabilityError`；发送回执 id 为空串（希沃不返回服务端 id） |
 | `integrations/base.py` | 集成基础设施 | `translate_event` / `build_payload`（钩子）/ `broadcast` / `send_payload` / `backoff_delay` / `resume_cursor` / `deliver` |
-| `integrations/onebot11/` | OneBot 11 | HTTP `POST /onebot/v11/<action>` + 正向 WS `/onebot/v11/ws`。retcode：OK=0 / UNSUPPORTED=100 / ILLEGAL_PARAM=1400 / AUTH=1401 |
+| `integrations/onebot11/` | OneBot 11 | HTTP `POST /onebot/v11/<action>` + 正向 WS `/onebot/v11/ws`。retcode：OK=0 / UNSUPPORTED=100 / ILLEGAL_PARAM=1400 / AUTH=1401 / FORBIDDEN=1403；字符串消息按 CQ 码解析（`auto_escape=true` 除外） |
 | `integrations/satori/` | Satori | WS `/v1/events` + HTTP `POST /satori/v1/<resource>.<method>`。opcode：EVENT=0 / PING=1 / PONG=2 / IDENTIFY=3 / READY=4 |
 | `interfaces/rest.py` | REST v2 | 统一信封 `{"status","data"|"error"}`；`ApiErrorCode` ↔ HTTP 状态码一一对应（capability→**501**、upstream→502、timeout→504）；`map_exception()` 是错误契约的唯一入口 |
 | `interfaces/openapi.yaml` | 接口描述 | OpenAPI 3.1 |
@@ -226,7 +226,7 @@ v1 的 `/api/*` **行为不变**；下表全部是**新增**端点，与 v1 共�
 | --- | --- | --- |
 | `/api/v2/status` | GET | 平台、连接状态、**能力表**、会话信息 |
 | `/api/v2/capabilities` | GET | 平台能力声明（`PlatformCapabilities.to_dict()`） |
-| `/api/v2/messages` | GET | 实时拉取（`count` ≤ 200）。走核心层 → **落库并去重** |
+| `/api/v2/messages` | GET | 实时拉取（`count` 1–200，越界 400）。走核心层 → **写入 `chat_history.v2.json` 并去重** |
 | `/api/v2/messages` | POST | 发送。body `{"segments": [...]}` 或简写 `{"content": "..."}` |
 | `/api/v2/history` | GET | 本地历史（`limit` ≤ 500 / `offset`），返回 `total` |
 | `/api/v2/sync` | POST | 触发一次拉取并接收，返回 `count` |
@@ -583,7 +583,9 @@ def xxx():
 - **upload policy 字段位置已按生产实测对齐（已结）**：生产实测（一次只读策略请求，不上传文件）确认 `expireSeconds` 在响应的 `data` 层，`policyList[0]` 含 `uploadUrl/headerFields/priority/type/formFields`。[mock_server.py](mock_server.py) 已按此修正，`tests/test_upload.py::test_mock_server_policy_matches_client_expectations` 已解除 skip
 - **上游错误处理尚未体系化（v1 侧）**：已完成「请求超时（`request_manager.TIMEOUT`）」「状态码语义统一到 `models.SeewoCode` / `SeewoQrCode` + `SendResult` 分存 `seewo_code`/`http_status`」「`-500/-505` 刷新会话后重发一次」「媒体端点不再吞掉发送失败」「`Upload` 策略失败降级」「上传实现合并为 `upload.upload_file` 单一入口」「`login.py` 的 4 处裸 `requests.get` 加 `timeout=15`」「`msg.py` 的 `print` 改为 `logging`」。v2 侧已完整建模为异常体系（`seewo/errors.py`）。v1 侧 DAO 层仍返回结果对象而非抛异常。
 - **ruff BLE001（盲捕 Exception）暂时全局忽略**：约 38 处 `except Exception`（api_server handler / TUI 事件兜底 / main 重连循环）需按调用点逐个收窄，属「上游错误处理体系化」的一部分；完成收窄后删除 [pyproject.toml](pyproject.toml) `[tool.ruff.lint]` 中的 `ignore = ["BLE001"]`
-- **OneBot 11 / Satori 协议端点无鉴权**：`config.json` 的 `api_key` 只保护 v1/v2 REST。OneBot 11 的 HTTP（`/onebot/v11/*`）与 WS（`/onebot/v11/ws`）端点**不做任何凭据校验**；Satori 只有 WS 层的 `IDENTIFY.token` 校验，HTTP API 无校验。生产部署需用反向代理或网络隔离。
+- **协议端点鉴权复用 `api_key`**：OneBot 11 / Satori 端点复用 `config.api_key` 鉴权（每次请求实时读取，热重载即时生效）：OneBot 用 `Authorization: Bearer` 或 `?access_token=`，Satori HTTP 用 `Authorization: Bearer`，Satori WS 在 IDENTIFY 通过前不推送事件。 `api_key` 为空串时所有端点放行（与 v1 不同），部署时务必设置。
+- **v2 没有后台轮询**：入站消息只在调用 `/api/v2/sync` 或 `GET /api/v2/messages` 时产生；需要持续接收由外部调度器定时调用。
+- **v2 / 协议端点无法发送媒体**：`api_server` 未给 v2 Provider 接上传器（接上会让已鉴权客户端指定服务端任意本地文件上传到希沃云），`send_image/send_audio` 如实申报 `false`。媒体请走 v1 `/api/send_image` / `/api/send_audio`。
 - **WebSocket 端点依赖 Werkzeug 开发服务器**：`flask-sock` 在 `app.run()` 下正常；生产部署需换成支持 WS 的 WSGI 服务器（如 gunicorn + gevent），否则 WS 握手失败（HTTP 端点不受影响）。
 - **希沃协议能力缺口（非待办，是协议限制）**：撤回 / 提及 / 引用 / 视频与文件发送 / 流式推送均未实现。协议层不具备或**未经验证**，不猜测行为。完整清单见 [docs/CAPABILITIES.md](docs/CAPABILITIES.md)。
 
@@ -595,6 +597,8 @@ def xxx():
 | `tokens.json` | 登录 Token 存储 | 两条路径（共享，注意写冲突） |
 | `chat_history.json` | 真实聊天记录持久化 | 两条路径 |
 | `chat_history_mock.json` | Mock 模式下的聊天记录 | Mock（`use_mock=true` 时自动切换） |
+| `chat_history.v2.json` | v2 服务独立的消息存储（**不读写** v1 的 `chat_history.json`） | 路径 B 的 v2 / 协议端点 |
+| `chat_history*.v2.json.cursor` | v2 游标（断线恢复） | 同上 |
 | `uploads.json` | 上传文件记录（dict，basename 冲突时使用 `#2`、`#3` 后缀） | 路径 A（`upload_file.py`）/ 路径 B（`/api/send_image` 等） |
 | `mock_data.json` | Mock 服务器持久化数据 | Mock |
 | `logs/*.log` | 按日期记录日志 | 两条路径 |

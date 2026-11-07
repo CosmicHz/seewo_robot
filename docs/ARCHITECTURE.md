@@ -103,7 +103,7 @@ class Provider(abc.ABC):
 三个不变量：
 
 1. **能力闸门在 `Provider.send()` 内部强制生效**。`send()` 是模板方法：先 `ensure_can_send()` → `ensure_text_length()` → 才调用子类的 `_send()`。调用方即便直接调 `provider.send()` 也绕不过检查 —— 「不伪造能力」不能依赖上层自觉。
-2. **游标语义由 Provider 自己定义**（希沃用页码，Satori 用 `sn`），上层只负责原样保存与回传。
+2. **游标语义由 Provider 自己定义**，上层只负责原样保存与回传。没有增量游标的平台返回 `None`（希沃即如此，每次拉最新页、靠核心层去重）。
 3. **可选能力缺失时抛 `CapabilityError`，不静默忽略、不假装成功**。
 
 `CallbackProvider` 是推送式平台的骨架：上游把事件推给 `on_message`，Provider 负责入队，`poll()` 从队列取走。这样推送式与拉取式平台在核心层看起来完全一样。
@@ -123,7 +123,7 @@ class Provider(abc.ABC):
 | **错误传播** | Provider 异常 → `ERROR` 事件 + 继续上抛，**不吞** |
 | **认证自愈** | 认证失效时刷新凭证并**重试恰好一次**（安全，因为上游在鉴权阶段就失败、没写入业务数据），仍失效则抛 `SessionExpiredError` |
 
-`Store`（`core/store.py`）是持久化抽象：`MemoryStore`（测试用）/ `JsonStore`（落盘）。`JsonStore` 沿用**旧 `chat_history.json` 格式**（`{"messages": [...]}`），可直接读取历史数据；写入用 `tempfile.mkstemp` + `os.replace` 原子替换，避免半截 JSON。
+`Store`（`core/store.py`）是持久化抽象：`MemoryStore`（测试用）/ `JsonStore`（落盘）。`JsonStore` 存 v2 消息结构，使用**独立文件** `chat_history.v2.json`，**不读写** v1 的 `chat_history.json`（两者记录结构不同，共用会让 v2 把 v1 历史写成空内容）；遇到缺 `segments` 字段的 v1 结构文件抛 `CorruptStoreError` 拒绝加载，原文件不动。所有读写由锁串行化；写入用 `tempfile.mkstemp` + `os.replace` 原子替换，避免半截 JSON。
 
 ### 2.5 `providers/seewo.py` — 希沃适配
 
@@ -139,7 +139,8 @@ statusCode   ──┘
 
 - 数字 type → `SegmentType`（2→图片、3→音频、4→视频、5/6→文件，其余→文本）
 - 业务码 → Provider 异常（`-500/-505` → `ProviderAuthError`，其余非 200 → `ProviderBusinessError`）
-- 游标 = **1-based 页码**（希沃的 `start` 是页码不是消息 id）
+- 轮询**固定拉第 1 页**（`start=1` = 最新页），不提供增量游标（`cursor=None`），靠核心层按 id 去重
+- 文本+媒体混发、多个媒体、非本地路径的媒体 → `CapabilityError`（协议行为未验证，不猜测）
 - 媒体发送 = 先上传拿 `downloadUrl`，再以对应 type 发送
 - `describe()` 输出平台与会话描述，供 `/status` 类接口使用
 
@@ -227,7 +228,7 @@ _dispatch(Event(MESSAGE_SENT))
 | 重复投递 | 双层去重（LRU + Store）。Provider 侧允许 at-least-once（`FakeProvider` 用较旧游标会重投），核心层负责收敛 |
 | 消息乱序 | 复合排序键 `(timestamp, id)` |
 | 事件乱序 | `_dispatch_lock` 串行派发，事件序 == 消息序 |
-| 断线 | 游标持久化 + 续拉；Satori 侧另有 `sn` 会话恢复 |
+| 断线 | 有游标的 Provider 持久化后续拉；希沃无游标，重连后拉最新页 + 去重。Satori `sn` 只推进计数，**不补发** |
 | 状态不一致 | 显式跃迁表 + `InvalidStateTransition` |
 | 半截文件 | `JsonStore` 原子写；缺 `messages` 键抛 `CorruptStoreError`（**故意不吞**：吞掉会让一次追加覆盖全部历史） |
 | 慢消费者 | SSE 队列满时丢最旧项，**绝不阻塞核心派发** |
@@ -255,7 +256,7 @@ _dispatch(Event(MESSAGE_SENT))
 5. 平台没有的能力 → 申报 `False` + 抛 `CapabilityError`，**不伪造、不静默**
 6. 事件派发必须串行，保证事件序 == 消息序
 7. v1 `/api/*` 响应格式与行为**保持不变**（兼容性硬约束）
-8. `chat_history.json` 旧格式继续可读
+8. v2 不读写 v1 的 `chat_history.json`（独立存储文件）
 
 ---
 

@@ -56,11 +56,16 @@ uv run api_server.py
 
 | 协议 | 方式 |
 | --- | --- |
-| v2 REST | `X-API-Key` 头（或 `?api_key=`）。未配置 `api_key` 时放行（本地部署） |
-| OneBot 11 | **当前不校验任何凭据**（协议层没有鉴权实现）。部署到非本机时，务必用反向代理或网络隔离挡住 `/onebot/*` |
-| Satori | WS `IDENTIFY` 帧的 `body.token`，与 `IntegrationConfig.token` 比对；不匹配返回 ERROR 帧 |
+所有端点共用 `config.json` 的 `api_key` 作为令牌，**每次请求实时读取**（`/api/config/reload` 换 key 后旧 key 立即失效）。
 
-> ⚠️ **安全提示**：`config.json` 的 `api_key` **只保护 v1/v2 REST**。OneBot 11 的 HTTP 与 WS 端点当前无鉴权，Satori 只有 WS 层有 token 校验。生产部署时不要把这些端点直接暴露到公网。
+| 协议 | 方式 |
+| --- | --- |
+| v2 REST | `X-API-Key` 头（或 `?api_key=`），不符 → 401 `unauthorized` |
+| OneBot 11 HTTP / 正向 WS | `Authorization: Bearer <api_key>` 或 `?access_token=<api_key>`。未提供 → HTTP 401，不匹配 → HTTP 403；WS 在握手阶段校验，不通过直接关闭 |
+| Satori HTTP | `Authorization: Bearer <api_key>`（**不接受** query 参数），不符 → 401 |
+| Satori 事件 WS | `IDENTIFY` 帧的 `body.token`。**IDENTIFY 通过之前不推送任何事件**；token 错误时回一个 `error` 事件帧后断开 |
+
+> `api_key` 为空串时所有端点放行，仅适合本机调试。服务默认监听 `0.0.0.0`，部署时务必设置非默认的 `api_key`。
 
 ### 1.3 能力表先行
 
@@ -95,7 +100,7 @@ curl -X POST http://localhost:5001/onebot/v11/send_msg \
 | `delete_msg` | 撤回（希沃不支持 → `retcode=100`） |
 | `get_group_list` | 群列表（希沃无群 → 空列表） |
 | `get_stranger_info` | 陌生人信息 |
-| `set_restart` | 重启（no-op） |
+| `set_restart` | 不支持 → `retcode=100`（本服务不能被协议端重启，不假装成功） |
 | `get_status` | `GET /onebot/v11/get_status` |
 
 **响应形状**（OneBot 11 标准）：
@@ -118,11 +123,16 @@ curl -X POST http://localhost:5001/onebot/v11/send_msg \
 | `1` | 异步成功 |
 | `100` | **不支持**（能力缺口 / 未实现的 action） |
 | `1400` | 参数非法 / 内部错误 |
-| `1401` | 认证失效 |
+| `1401` | 未提供令牌（HTTP 401）/ 希沃会话失效 |
+| `1403` | 令牌不匹配（HTTP 403） |
 
-### 2.2 消息段（CQ 码段数组）
+### 2.2 消息格式（段数组 / CQ 码字符串）
 
-OneBot 11 的 `message` 字段支持**字符串**与**段数组**两种形态。本实现**两种都接受**（入站解析），出站统一用**段数组**。
+OneBot 11 的 `message` 字段支持**字符串**与**段数组**两种形态，本实现两种都接受，出站统一用**段数组**。
+
+- 字符串默认按 **CQ 码**解析（`[CQ:image,file=...]`，含 `&#91;` / `&#93;` / `&#44;` / `&amp;` 反转义）
+- 请求带 `auto_escape=true` 时整串按纯文本处理
+- 未识别的 CQ 码 / 段类型不会当文本发出，由能力闸门拒绝（`retcode=100`）
 
 | 平台中立段 | OneBot 段 |
 | --- | --- |
@@ -138,7 +148,9 @@ OneBot 11 的 `message` 字段支持**字符串**与**段数组**两种形态。
 
 ### 2.3 正向 WebSocket
 
-客户端连 `ws://localhost:5001/onebot/v11/ws`，连上后立刻收到一条 `meta_event` / `lifecycle` 事件，之后是持续推送的消息事件。
+客户端连 `ws://localhost:5001/onebot/v11/ws?access_token=<api_key>`（或带 `Authorization: Bearer` 头），连上后立刻收到一条 `meta_event` / `lifecycle` 事件，之后推送消息事件。
+
+> **本服务没有后台轮询**：希沃是拉取式平台，入站消息只在有人调用 `POST /api/v2/sync` 或 `GET /api/v2/messages` 时产生，届时才推送给 WS 客户端。需要持续接收时，由外部调度器定时调 `/api/v2/sync`（频率自行控制，防风控）。
 
 ```json
 {
@@ -157,15 +169,15 @@ WS 上客户端也可以**反向调 API**（OneBot 11 的「API over WS」用法
 
 ### 2.4 接入示例
 
-**NoneBot2**（消费 OneBot 11）—— 用官方 OneBot 11 驱动器指向本服务：
+**NoneBot2**（消费 OneBot 11）—— 安装 `nonebot-adapter-onebot` 并注册 V11 适配器，使用带 WebSocket 客户端能力的驱动器，在 `.env` 中配置正向 WS：
 
-```json
-{
-  "onebot": {
-    "ws_reverse": { "url": "ws://localhost:5001/onebot/v11/ws" }
-  }
-}
+```dotenv
+DRIVER=~fastapi+~websockets
+ONEBOT_WS_URLS=["ws://localhost:5001/onebot/v11/ws"]
+ONEBOT_ACCESS_TOKEN=<config.json 的 api_key>
 ```
+
+配置项名称以 [NoneBot OneBot 适配器文档](https://onebot.adapters.nonebot.dev/docs/api/v11/config) 为准（`onebot_ws_urls` / `onebot_access_token`）。本项目未在真实 NoneBot2 实例上联调。
 
 **AstrBot** —— 添加 OneBot 11 平台，正向 WS 地址填 `ws://localhost:5001/onebot/v11/ws`。
 
@@ -175,7 +187,7 @@ WS 上客户端也可以**反向调 API**（OneBot 11 的「API over WS」用法
 
 ### 3.1 WebSocket 信令
 
-客户端连 `ws://localhost:5001/v1/events`（也支持 `ws://localhost:5001/{platform}/{account}/satori/v1/events` 形式）。
+客户端连 `ws://localhost:5001/v1/events`。（带 `/{platform}/{account}` 前缀的形式**只对 HTTP API 有效**，事件 WS 只注册了 `/v1/events`。）
 
 **opcode**：
 
@@ -191,11 +203,11 @@ WS 上客户端也可以**反向调 API**（OneBot 11 的「API over WS」用法
 
 ```text
 客户端 ──IDENTIFY {token, sn?}──▶ 服务端
-                                 ├─ token 不匹配 ──▶ EVENT{type:"error"}
+                                 ├─ token 不匹配 ──▶ EVENT{type:"error"}，随后断开
                                  └─ token 匹配   ──▶ READY{logins, proxy_urls}
 ```
 
-`IDENTIFY` 带 `sn` 表示**会话恢复**：服务端把 `sn` 推进到客户端已收到的位置，之后的新事件 `sn` 继续递增（语义等价于「不重发已收事件」）。
+`IDENTIFY` 带 `sn` 时，服务端只把 `sn` 计数推进到该位置，之后的新事件 `sn` 继续递增。**本服务不补发断线期间的事件**（不保留已推送事件的缓冲）；断线期间的消息请通过 `GET /api/v2/history` 补拉。
 
 **事件形状**：
 
@@ -240,6 +252,7 @@ Satori 用 `{resource}.{method}` 点分路径：
 
 ```bash
 curl -X POST http://localhost:5001/satori/v1/message.create \
+  -H "Authorization: Bearer <api_key>" \
   -H "Content-Type: application/json" \
   -d '{"channel_id":"student-uid","content":"你好"}'
 ```
@@ -254,7 +267,7 @@ POST /{platform}/{account}/satori/v1/message.create
 
 | 方法 | 说明 |
 | --- | --- |
-| `message.create` | 发消息。**返回数组**（Satori 规范要求 `Message[]`，不是单个对象） |
+| `message.create` | 发消息。返回 Satori `Message[]`（`{id, content, channel, user?}`）。希沃不返回服务端 id，`id` 为空串 |
 | `message.get` | 按 `message_id` 取消息 |
 | `message.delete` | 撤回（希沃不支持 → `{"error": ...}`） |
 | `channel.get` | 会话信息 |
