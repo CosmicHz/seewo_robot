@@ -333,6 +333,7 @@ class MessageService:
         try:
             result = self._provider.poll(cursor=cursor, limit=limit)
         except ProviderAuthError as e2:
+            self._session_expired = True
             self._emit_error(f"会话已失效: {e2}", data={"auth_expired": True})
             raise SessionExpiredError(str(e2)) from e2
         self._session_expired = False

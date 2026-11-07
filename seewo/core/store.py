@@ -173,15 +173,22 @@ class JsonStore(Store):
     def append(self, messages: Iterable[Message]) -> int:
         with self._lock:
             self._ensure_loaded()
-            written = 0
+            added: list[Message] = []
             for msg in messages:
                 if msg.id in self._messages:
                     continue
                 self._messages[msg.id] = msg
-                written += 1
-            if written:
-                self._flush()
-            return written
+                added.append(msg)
+            if added:
+                try:
+                    self._flush()
+                except BaseException:
+                    # 落盘失败：内存缓存不能领先磁盘，否则重投会被 contains()
+                    # 判为重复而永远收不到 —— 只撤销本次新增的条目后原样抛出
+                    for msg in added:
+                        self._messages.pop(msg.id, None)
+                    raise
+            return len(added)
 
     def load(self, limit: int = 0, offset: int = 0) -> tuple[Message, ...]:
         ordered = self._ordered()

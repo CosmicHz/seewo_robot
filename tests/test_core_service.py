@@ -28,6 +28,7 @@ from seewo.errors import (
     ProviderBusinessError,
     ProviderConnectionError,
     SessionExpiredError,
+    StoreError,
 )
 from seewo.models import (
     ConnectionState,
@@ -405,6 +406,8 @@ class TestErrorPropagation:
         with pytest.raises(SessionExpiredError):
             service.poll_once()
         assert len(calls) == 2
+        # 重试仍认证失效 → 标志必须重新置 True，/api/v2/status 才能提示重新登录
+        assert service.session_expired is True
         provider.poll = original
 
     def test_poll_forever_emits_one_error_per_failure(self, service, provider):
@@ -773,3 +776,30 @@ class TestSessionExpiredFlag:
             service.send([Segment.text_seg("x")])
         assert service.session_expired is False
         provider._send = original
+
+
+class TestJsonStoreRollback:
+    def test_flush_failure_rolls_back_memory_cache(self, tmp_path, monkeypatch):
+        """CodeRabbit：写盘失败时内存缓存不能领先磁盘，否则重投被 contains() 判重。"""
+        from seewo.core import store as store_mod
+
+        path = str(tmp_path / "chat.v2.json")
+        store = JsonStore(path)
+        original = store_mod._atomic_write
+        state = {"fail": True}
+
+        def flaky(p, content):
+            if state["fail"]:
+                state["fail"] = False
+                raise OSError("disk full")
+            return original(p, content)
+
+        monkeypatch.setattr(store_mod, "_atomic_write", flaky)
+        msg = Message(id="m1", platform="fake", timestamp=1)
+        with pytest.raises(StoreError):
+            store.append([msg])
+        assert store.contains("m1") is False
+        assert store.load() == ()
+        # 重投可以成功
+        assert store.append([msg]) == 1
+        assert [m.id for m in store.load()] == ["m1"]

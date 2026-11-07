@@ -274,7 +274,6 @@ class TestAdaptersWired:
     @pytest.mark.parametrize("name", ["onebot_adapter", "satori_adapter"])
     def test_core_event_reaches_registered_connection(self, api_server, name):
         """核心派发事件 → 已登记的连接收到（不连接平台、不触发轮询）。"""
-        from seewo.models import Event, EventType, Message, Segment
 
         adapter = getattr(api_server, name)
 
@@ -287,28 +286,42 @@ class TestAdaptersWired:
 
         conn = Conn()
         adapter.register_connection(conn)
+        import os
+
+        from seewo.models import Message, Segment
+
+        store = api_server.service.store
+        backup = None
+        existed = os.path.exists(store.path)
+        if existed:
+            with open(store.path, "rb") as f:
+                backup = f.read()
         try:
-            api_server.service._dispatch(
-                Event(
-                    type=EventType.MESSAGE,
-                    message=Message(
-                        id="wired-1",
+            api_server.service.ingest(
+                [
+                    Message(
+                        id=f"wired-{name}",
                         platform="seewo",
                         segments=(Segment.text_seg("hi"),),
                         timestamp=1,
-                    ),
-                    timestamp=1,
-                )
+                    )
+                ]
             )
         finally:
             adapter.unregister_connection(conn)
+            if backup is not None:
+                with open(store.path, "wb") as f:
+                    f.write(backup)
+            elif os.path.exists(store.path):
+                os.remove(store.path)
+            store.reload()
         assert len(conn.frames) == 1
 
 
 class TestColdStartBinding:
-    """#11 回归：v2 首个请求前若会话未初始化，应先按需 `session.init()`。"""
+    """#11 回归：Provider 首次 connect 时按需 `session.init()`。"""
 
-    def test_bind_initialises_session_on_demand(self, api_server, monkeypatch):
+    def test_connect_initialises_session_on_demand(self, api_server, monkeypatch):
         sess = api_server.Session()
         calls = []
 
@@ -320,18 +333,16 @@ class TestColdStartBinding:
             return sess
 
         monkeypatch.setattr(sess, "init", fake_init)
-        provider = api_server._BoundSeewoProvider(sess)
-        _, _, stu_msg = provider._bind()
+        api_server._BoundSeewoProvider(sess).connect()
         assert calls == [1]
-        assert stu_msg is sess.stu_msg
 
-    def test_bind_still_fails_when_no_valid_token(self, api_server, monkeypatch):
+    def test_connect_fails_when_no_valid_token(self, api_server, monkeypatch):
         from seewo.errors import ProviderConnectionError
 
         sess = api_server.Session()
         monkeypatch.setattr(sess, "init", lambda: sess)
         with pytest.raises(ProviderConnectionError):
-            api_server._BoundSeewoProvider(sess)._bind()
+            api_server._BoundSeewoProvider(sess).connect()
 
 
 class TestColdStartBindingRealPath:
