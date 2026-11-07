@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "flask==3.1.2",
+    "flask-sock==0.7.0",
     "pillow==12.3.0",
     "pyperclip==1.11.0",
     "requests==2.34.2",
@@ -39,5 +40,8 @@ pythonpath = ["."]
 ignore = ["BLE001"]
 
 [tool.setuptools.packages.find]
-include = ["seewo_robot*"]
-exclude = ["tmp", "logs"]
+# 只打包 `seewo/`。`SeewoProvider` 惰性依赖仓库根的希沃协议模块（login/msg/stu/upload），
+# 这些模块不在 wheel 里 —— 本项目**仅支持在仓库内运行**（pytest 用 pythonpath="."）。
+# 安装后的 wheel 可以使用平台中立部分（models/core/sdk/FakeProvider），不能直连希沃。
+include = ["seewo*"]
+exclude = ["tmp", "logs", "tests*", "test*"]

@@ -195,9 +195,12 @@ class TestMergeMessages:
 def test_overwrite_chat_history_file_format(chat_file):
     overwrite_chat_history_file([msg_obj(1, content="中文")])
     raw = chat_file.read_text(encoding="utf-8")
-    assert '"messages"' in raw
+    # 需求：写成**合法 JSON**、含 messages 键、中文不转义（可读性 + 体积）。
+    # 不断言缩进/换行 —— 那是格式化选择，不是需求。
+    parsed = json.loads(raw)
+    assert "messages" in parsed
+    assert parsed["messages"][0]["content"] == "中文"
     assert "中文" in raw  # ensure_ascii=False
-    assert raw.endswith("}") and "\n" in raw  # indent=2
 
 
 def test_logw_writes_dated_log(tmp_path, monkeypatch):

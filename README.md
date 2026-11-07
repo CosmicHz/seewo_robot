@@ -31,6 +31,22 @@ Seewo 班牌机器人是一个对接**希沃云班**小程序的聊天工具。�
 - **CLI 命令行 + Python SDK**：方便脚本调用或二次开发
 - **Mock 本地调试服务器**：不连接真实希沃服务器也能完整测试所有功能
 
+### 🆕 通用消息服务能力（v2 架构）
+
+项目在保留原有两条路径的基础上，新增了一套**业务与协议解耦**的通用消息服务内核（`seewo/` 包）：
+
+- **平台中立数据模型**：消息 / 消息段 / 用户 / 会话 / 事件 / 能力声明 / 连接状态
+- **统一核心服务**：去重、排序、断线恢复、并发控制、状态机、事件分发
+- **REST v2 接口**（`/api/v2/*`）：统一响应信封 + 统一错误码 + OpenAPI 描述
+- **类型化 Python SDK**（`seewo/sdk.py`）
+- **主流框架协议接入**：**OneBot 11**（NoneBot2 / AstrBot / NapCat 等）与 **Satori**（Koishi / LangBot 等）—— 均可离线验证
+- **平台中立事件出口**：SSE（`GET /api/v2/events`）
+- **架构守卫**：分层依赖方向由自动化测试强制执行，不会随时间腐化
+
+详见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
+
+> **兼容性**：v1 的 `/api/*` 响应格式与行为不变，现有 v1 客户端无需修改。v2 与协议端点有破坏性调整（必须带令牌、非法参数返回 400、存储改用独立文件），见 [`docs/MIGRATION.md`](docs/MIGRATION.md)。
+
 ## 环境要求
 
 - **Python 3.12+**（项目使用了 match-case 等新语法）
@@ -424,6 +440,99 @@ Invoke-WebRequest -Uri "http://localhost:9000/mock/add_message" `
 
 ---
 
+## 🆕 REST API v2（通用消息服务）
+
+v2 与 v1 **并存**，但**存储相互独立**：v1 读写 `chat_history.json`，v2 读写 `chat_history.v2.json`（v2 不导入 v1 历史）。v2 REST 与 OneBot/Satori 适配器共享同一个 `MessageService`。v2 采用统一响应信封与统一错误码，接口描述见 [`seewo/interfaces/openapi.yaml`](seewo/interfaces/openapi.yaml)。
+
+### 端点一览
+
+| 接口 | 方法 | 说明 |
+| --- | --- | --- |
+| `/api/v2/status` | GET | 服务状态：平台、连接状态、**能力表**、会话信息 |
+| `/api/v2/capabilities` | GET | **平台能力声明**（客户端据此决定 UI 显示哪些功能） |
+| `/api/v2/messages` | GET | 实时拉取最新消息（`count`，上限 200） |
+| `/api/v2/messages` | POST | 发送消息（消息段序列） |
+| `/api/v2/history` | GET | 读本地历史（`limit`/`offset`，返回 `total`） |
+| `/api/v2/sync` | POST | 触发一次拉取并接收 |
+| `/api/v2/events` | GET | **SSE 事件流**（平台中立，不依赖任何框架协议） |
+| `/api/v2/connection` | POST | `connect` / `disconnect` 平台连接 |
+
+### 统一响应信封
+
+成功：
+
+```json
+{"status": "ok", "data": {"id": "12", "platform": "seewo", "...": "..."}}
+```
+
+失败：
+
+```json
+{"status": "error", "error": {"code": "capability", "message": "..."}, "data": null}
+```
+
+错误码与 HTTP 状态码一一对应：
+
+| `error.code` | HTTP | 含义 |
+| --- | --- | --- |
+| `invalid_request` | 400 | 参数非法 |
+| `unauthorized` | 401 | API Key 不对 |
+| `need_login` | 401 | 需要重新扫码 |
+| `not_found` | 404 | 资源不存在 |
+| `conflict` | 409 | 状态冲突 |
+| `capability` | **501** | 平台不具备该能力 |
+| `upstream` | 502 | 上游平台失败 |
+| `timeout` | 504 | 上游超时 |
+| `internal` | 500 | 服务端内部错误 |
+
+### 发送消息
+
+```bash
+curl -X POST http://localhost:5001/api/v2/messages \
+  -H "X-API-Key: your-secret-key" \
+  -H "Content-Type: application/json" \
+  -d '{"segments": [{"type": "text", "text": "你好"}]}'
+```
+
+也接受简写 `{"content": "你好"}`。
+
+### Python SDK（v2）
+
+```python
+from seewo.sdk import SeewoRobotClient
+from seewo.models import Segment
+
+with SeewoRobotClient(base_url="http://localhost:5001", api_key="xxx") as c:
+    print(c.status())
+    print(c.capabilities())
+
+    c.send_text("你好")
+    # 媒体发送当前不可用（能力表 send_image/send_audio=false），请走 v1 端点
+```
+
+> v2 SDK 不做本地文件上传。**当前希沃 Provider 在 v2 下不支持媒体发送**（能力表 `send_image/send_audio=false`，调用返回 `501 capability`），发图片/音频请用 v1 的 `/api/send_image` / `/api/send_audio`。
+
+---
+
+## 🆕 第三方机器人框架接入
+
+服务启动时会自动挂载协议端点（与 v1/v2 共用同一个端口）：
+
+| 路径 | 协议 | 接入方 |
+| --- | --- | --- |
+| `/onebot/v11/<action>` | OneBot 11 HTTP API | NoneBot2 / AstrBot / NapCat 等 |
+| `/onebot/v11/ws` | OneBot 11 正向 WebSocket | 同上 |
+| `/satori/v1/<resource>.<method>` | Satori HTTP API | Koishi / LangBot 等 |
+| `/v1/events` | Satori 事件 WebSocket | 同上 |
+
+框架选型与逐帧接入说明见 [`docs/INTEGRATION.md`](docs/INTEGRATION.md)。
+
+> 🔐 协议端点复用 `config.json` 的 `api_key` 鉴权：OneBot 用 `Authorization: Bearer <api_key>` 或 `?access_token=<api_key>`，Satori 用 `Authorization: Bearer <api_key>`（WS 在 IDENTIFY 的 `token` 中提供）。
+>
+> 本服务**没有后台轮询**：需要持续收消息时，由外部定时调用 `POST /api/v2/sync`（频率自行控制，防风控）。
+
+---
+
 ## 命令执行（以 `/` 开头的留言，仅路径 A）
 
 只有 `main.py`（路径 A）会把**以 `/` 开头**的留言当作命令处理：
@@ -448,6 +557,8 @@ Invoke-WebRequest -Uri "http://localhost:9000/mock/add_message" `
 | `tokens.json` | 登录凭证（扫码后生成，包含家长 UID、token 等） | 两条路径（共享，注意写冲突） |
 | `chat_history.json` | **真实**聊天记录持久化 | 两条路径（`use_mock=false` 时） |
 | `chat_history_mock.json` | **Mock 模式**聊天记录 | Mock（`use_mock=true` 时自动切换，隔离真实数据） |
+| `chat_history.v2.json` | v2 服务的消息存储（与 v1 独立） | 路径 B 的 `/api/v2/*` 与协议端点 |
+| `chat_history*.v2.json.cursor` | v2 的游标文件 | 同上 |
 | `uploads.json` | 上传到希沃云盘的文件记录 | 两条路径 |
 | `mock_data.json` | Mock 服务器持久化数据（调用 `/mock/save` 时生成） | Mock |
 | `qrcode.png` | 登录时生成的二维码图片 | 两条路径 |
@@ -470,9 +581,20 @@ seewo_robot/
 │
 ├── auto_attend.py       # [独立脚本] 批量考勤签到工具（不使用项目统一登录；次要功能，维护优先级低）
 │
-├── api_server.py        # [路径B] REST API 服务端（Flask）
+├── api_server.py        # [路径B] REST API 服务端（Flask）；同时挂载 v2 / OneBot 11 / Satori 端点
 ├── tui_client.py        # [路径B] TUI 终端图形客户端（Textual）
-├── client.py            # [路径B] CLI 命令行客户端 + Python SDK
+├── client.py            # [路径B] CLI 命令行客户端 + Python SDK（v1）
+│
+├── seewo/               # [通用消息服务] 平台中立内核（详见 docs/ARCHITECTURE.md）
+│   ├── models.py        #   平台中立模型：Segment/Message/User/Conversation/Event/能力/状态
+│   ├── errors.py        #   异常体系（平台错误 → 平台中立语义）
+│   ├── provider/        #   Provider 契约（平台接入的唯一扩展点）
+│   ├── core/            #   通用业务：去重/排序/游标恢复/并发/状态机/事件分发
+│   ├── providers/       #   具体平台实现（seewo.py —— 唯一接触希沃协议层的地方）
+│   ├── integrations/    #   第三方框架协议适配（onebot11/、satori/）
+│   ├── interfaces/      #   对外 HTTP 接口（REST v2 + OpenAPI 描述）
+│   ├── sdk.py           #   类型化 Python SDK（v2）
+│   └── testing/         #   FakeProvider（离线测试替身）
 │
 ├── mock_server.py       # [调试] 本地 Mock 服务器（跨两条路径）
 │
@@ -491,6 +613,12 @@ seewo_robot/
 │
 ├── test/                # [测试] 手工联调脚本（test_api.py 等，需服务在跑）
 ├── tests/               # [测试] pytest 用例（离线，uv run pytest）
+│
+├── docs/                # [文档] 架构、协议接入、迁移、能力缺口
+│   ├── ARCHITECTURE.md  #   分层、依赖方向、数据流、不变量清单
+│   ├── INTEGRATION.md   #   OneBot 11 / Satori 接入实操
+│   ├── MIGRATION.md     #   v1 → v2 迁移指南
+│   └── CAPABILITIES.md  #   能力声明与已知能力缺口
 │
 ├── pyproject.toml       # [元] 项目元数据与依赖声明（仅在此声明依赖）
 ├── uv.lock              # [本机] uv 锁文件（不入库，.gitignore 已忽略）
@@ -551,6 +679,23 @@ seewo_robot/
 ## 已知问题
 
 - ⚠️ **uploads.json 按纯文件名做 key，同名覆盖**：写入逻辑在 [upload.py#L121-L122](upload.py#L121-L122)，key 只取 `os.path.basename(file)`，不区分完整路径、不区分家长账号。同一个 basename 的文件重复上传（哪怕路径不同、账号不同、内容不同），后写的都会直接覆盖前一条。**影响范围有限**：主业务链路（上传 → 发送留言）走内存中的 `downloadUrl`，不读这份台账，因此不会导致发错、漏发；只会影响"事后手动打开 uploads.json 按文件名翻历史上传 URL"的查询场景。
+- ⚠️ **协议端点与 v2 共用 `api_key`**：`api_key` 为空串时 v2 与协议端点全部放行。服务默认监听 `0.0.0.0`，请务必设置非默认的 `api_key`，不要直接暴露到公网。
+- ⚠️ **v2 / 协议端点不能发媒体**：未接上传器（避免已鉴权客户端借此上传服务端任意本地文件），媒体请走 v1 端点。
+- ⚠️ **v2 没有后台轮询**：WS 客户端只在有人调用 `/api/v2/sync` 或 `GET /api/v2/messages` 后才收到新消息事件。
+- ⚠️ **WebSocket 端点依赖 Werkzeug 开发服务器**：`flask-sock` 在 `app.run()` 下工作正常，但生产部署需换成支持 WS 的 WSGI 服务器（如 gunicorn + gevent），否则 WS 端点会握手失败（HTTP 端点不受影响）。
+- ℹ️ **希沃协议相关能力存在缺口**：撤回、提及、引用、视频/文件发送、流式推送均未实现 —— 不是遗漏，是**协议层不具备或未验证**。完整清单见 [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md)。
+
+---
+
+## 延伸文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 分层架构、依赖方向、数据流、不变量清单 |
+| [`docs/INTEGRATION.md`](docs/INTEGRATION.md) | OneBot 11 / Satori 接入实操、自写适配器指南 |
+| [`docs/MIGRATION.md`](docs/MIGRATION.md) | v1 → v2 迁移指南、兼容性保证 |
+| [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) | 能力声明与已知能力缺口 |
+| [`AGENTS.md`](AGENTS.md) | 给 AI 助手的完整项目上下文 + 开发规范 |
 
 ---
 

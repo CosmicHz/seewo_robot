@@ -229,6 +229,29 @@ class TestSend:
         assert result.seewo_code == 40000
         assert result.message == "留言内容不能超过200字符"
 
+    def test_success_is_reported_on_stdout(self, http, dao, capsys):
+        """路径 A（main.py / send_msg.py）不配 logging，发送结果靠 stdout 可见。
+
+        回归（B3）：曾把 print 改成 logger.info，未配 logging 时输出直接消失。
+        只断言「成功/失败 + 关键信息」可见，不锁定具体措辞。
+        """
+        http.add(http.POST, mcampus_url(POST_NOTE), json={"statusCode": 200})
+        dao.send("你好", 1)
+        out = capsys.readouterr().out
+        assert "发送成功" in out
+        assert "你好" in out
+
+    def test_failure_is_reported_on_stdout(self, http, dao, capsys):
+        http.add(
+            http.POST,
+            mcampus_url(POST_NOTE),
+            json={"statusCode": 40000, "message": "留言内容不能超过200字符"},
+        )
+        dao.send("x", 1)
+        out = capsys.readouterr().out
+        assert "发送失败" in out
+        assert "留言内容不能超过200字符" in out
+
 
 class TestDelete:
     def test_deletes_latest_message_id(self, http, dao):

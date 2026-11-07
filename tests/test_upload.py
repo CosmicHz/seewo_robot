@@ -174,6 +174,12 @@ class TestUpload:
         os.remove(path)  # 句柄未关闭时这里会抛 PermissionError
 
     def test_second_upload_on_same_instance_is_skipped(self, cos, tmp_path):
+        """实例级的一次性语义：`Upload` 实例上传过一次后不再重复上传。
+
+        注意这是**实例级**行为，不是公开契约 —— 公开入口
+        `upload_file(account, file, type)` 每次都新建实例，因此连续调用
+        不受此限制（见 `test_public_entrypoint_uploads_each_call`）。
+        """
         cos.add(
             cos.POST,
             UPLOAD_URL,
@@ -184,6 +190,25 @@ class TestUpload:
         before = len(cos.calls)
         assert up.upload(str(_make_file(tmp_path, "b.png")), "image/png") is None
         assert len(cos.calls) == before
+
+    def test_public_entrypoint_uploads_each_call(self, cos, tmp_path):
+        """公开函数 `upload_file()` 连续调用会真的上传两次。
+
+        它每次新建 `Upload` 实例，因此不受实例级一次性标志影响 ——
+        断言的是**公开契约**，不是内部实现。
+        """
+        cos.add(
+            cos.POST,
+            UPLOAD_URL,
+            json={"code": 0, "data": {"downloadUrl": "http://cdn/x.png"}},
+        )
+        account = FakeAccount()
+        upload_module.upload_file(account, str(_make_file(tmp_path)), "image/png")
+        upload_module.upload_file(
+            account, str(_make_file(tmp_path, "b.png")), "image/png"
+        )
+        uploads = [c for c in cos.calls if c.request.url == UPLOAD_URL]
+        assert len(uploads) == 2
 
     def test_failure_response_keeps_isupload_false(self, cos, tmp_path):
         cos.add(cos.POST, UPLOAD_URL, json={"code": -1, "message": "denied"})

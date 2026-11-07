@@ -19,6 +19,11 @@ from qrcode import print_qrcode
 
 logger = logging.getLogger("seewo.login")
 
+#: 登录流程各请求的超时（秒）。
+#: 此前这四处 requests.get 没有 timeout，对端挂死会导致调用方无限阻塞
+#: （api_server 的后台登录线程会永久卡住，且无法优雅退出）。
+REQUEST_TIMEOUT = 15
+
 
 class acc:
     """账户对象，封装登录凭证和请求头
@@ -128,6 +133,7 @@ class acc:
             headers=self.headers,
             proxies=proxies,
             verify=verify,
+            timeout=REQUEST_TIMEOUT,
         )
         logger.debug("响应 status=%s body=%.200s", re.status_code, re.text)
         return self.status(re.text)
@@ -135,7 +141,12 @@ class acc:
 
 def get_cookies():
     """访问希沃登录页面获取初始 Cookie（用于后续二维码请求）"""
-    re = requests.get(url=urls().login_api, headers=headers_nocookie, proxies=proxies)
+    re = requests.get(
+        url=urls().login_api,
+        headers=headers_nocookie,
+        proxies=proxies,
+        timeout=REQUEST_TIMEOUT,
+    )
     return requests.utils.dict_from_cookiejar(re.cookies)
 
 
@@ -145,7 +156,12 @@ def download_qrcode():
     Returns:
         dict: 用于轮询扫码状态的 Cookie
     """
-    re = requests.get(urls().qrcode_image, cookies=get_cookies(), proxies=proxies)
+    re = requests.get(
+        urls().qrcode_image,
+        cookies=get_cookies(),
+        proxies=proxies,
+        timeout=REQUEST_TIMEOUT,
+    )
     content = re.content
     write_file(qrcode_file, content)
     return requests.utils.dict_from_cookiejar(re.cookies)
@@ -165,6 +181,7 @@ def check_qrcode(cookies):
         headers=headers_nocookie,
         cookies=cookies,
         proxies=proxies,
+        timeout=REQUEST_TIMEOUT,
     )
     return json.loads(re.text)
 

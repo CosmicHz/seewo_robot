@@ -1,0 +1,541 @@
+openapi: 3.1.0
+info:
+  title: Seewo Robot — 通用消息服务 API
+  version: "2.0.0"
+  description: |
+    平台中立的通用消息服务接口。
+
+    ## 版本策略
+
+    - `/api/*` —— 旧接口（v1，无 `/v1` 前缀），**逐字段兼容**，不再新增功能
+    - `/api/v2/*` —— 本文档描述的新接口，采用统一响应信封与错误码
+
+    ## 统一响应信封
+
+    成功：
+
+    ```json
+    { "status": "ok", "data": { } }
+    ```
+
+    失败：
+
+    ```json
+    {
+      "status": "error",
+      "error": { "code": "invalid_request", "message": "..." },
+      "data": null
+    }
+    ```
+
+    ## 认证
+
+    所有端点需要请求头 `X-API-Key`（或 query 参数 `api_key`）。
+    未配置 API Key 的部署放行全部请求。
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:5001
+    description: 本地服务
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: status
+    description: 服务状态与能力
+  - name: messages
+    description: 消息收发
+  - name: connection
+    description: 连接生命周期
+
+paths:
+  /api/v2/status:
+    get:
+      tags: [status]
+      summary: 服务状态
+      description: 返回平台标识、连接状态、能力声明、会话是否失效。
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Status"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v2/capabilities:
+    get:
+      tags: [status]
+      summary: 平台能力声明
+      description: |
+        平台真实支持的能力。客户端应据此判断某个操作是否可用 ——
+        服务端**不会**伪造能力：不支持的操作返回 `501 capability`。
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Capabilities"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v2/messages:
+    get:
+      tags: [messages]
+      summary: 拉取最新消息
+      description: |
+        实时向平台拉取最新消息并接收（去重 + 有序）。
+
+        与 v1 的 `/api/messages` 不同：v2 走核心层，**新消息会写入本地存储**
+        （去重后只落一次），因此 `/api/v2/history` 能查到刚拉到的消息。
+      parameters:
+        - name: count
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          count:
+                            type: integer
+                          messages:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Message"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+
+    post:
+      tags: [messages]
+      summary: 发送消息
+      description: |
+        发送一条消息。消息由「消息段」组成；也接受 `content` 简写（自动包成文本段）。
+
+        平台不具备某种消息段能力时返回 `501 capability`，**不静默降级**。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: "#/components/schemas/SendSegmentsRequest"
+                - type: object
+                  required: [content]
+                  properties:
+                    content:
+                      type: string
+                    conversation_id:
+                      type: string
+                    reply_to:
+                      type: string
+                    user_id:
+                      type: string
+            examples:
+              text:
+                summary: 文本
+                value:
+                  content: "今天放学早点回来"
+                  conversation_id: "seewo-direct"
+              segments:
+                summary: 文本 + 图片
+                value:
+                  conversation_id: "seewo-direct"
+                  segments:
+                    - type: text
+                      text: "看这个"
+                    - type: image
+                      url: "https://example.com/a.png"
+                      mime: image/png
+      responses:
+        "200":
+          description: 发送成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Message"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "501":
+          $ref: "#/components/responses/CapabilityError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+
+  /api/v2/history:
+    get:
+      tags: [messages]
+      summary: 读历史消息
+      description: 从本地存储读取历史消息，按 `(timestamp, id)` 升序。
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          count:
+                            type: integer
+                          total:
+                            type: integer
+                          messages:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Message"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v2/sync:
+    post:
+      tags: [messages]
+      summary: 触发一次拉取
+      description: 供外部调度器调用；等价于 `GET /messages` 但计入同步语义。
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                limit:
+                  type: integer
+                  minimum: 1
+                  maximum: 200
+                  default: 50
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          count:
+                            type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+
+  /api/v2/events:
+    get:
+      tags: [status]
+      summary: 事件流（SSE）
+      description: |
+        以 Server-Sent Events 推送平台中立的核心事件。
+        事件类型：`message` / `message.sent` / `message.failed` /
+        `connection.connected` / `connection.disconnected` / `error`。
+
+        这是**平台中立**的事件出口 —— 不依赖任何具体框架协议。
+      responses:
+        "200":
+          description: 事件流
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v2/connection:
+    post:
+      tags: [connection]
+      summary: 连接控制
+      description: 显式触发 connect / disconnect / reconnect。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [connect, disconnect, reconnect]
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          state:
+                            $ref: "#/components/schemas/ConnectionState"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: 非法状态跃迁
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  responses:
+    BadRequest:
+      description: 请求参数不合法
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Unauthorized:
+      description: 未认证（缺少/错误的 API Key，或会话失效需重新登录）
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    CapabilityError:
+      description: 平台不具备该能力
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    UpstreamError:
+      description: 上游平台失败
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+
+  schemas:
+    OkEnvelope:
+      type: object
+      required: [status, data]
+      properties:
+        status:
+          type: string
+          const: ok
+        data:
+          nullable: true
+
+    ErrorEnvelope:
+      type: object
+      required: [status, error]
+      properties:
+        status:
+          type: string
+          const: error
+        error:
+          $ref: "#/components/schemas/ApiError"
+        data:
+          nullable: true
+
+    ApiError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - ok
+            - invalid_request
+            - unauthorized
+            - need_login
+            - not_found
+            - conflict
+            - capability
+            - upstream
+            - timeout
+            - internal
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    Segment:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [text, image, audio, video, file, at, quote, unknown]
+        text:
+          type: string
+        url:
+          type: string
+        mime:
+          type: string
+        name:
+          type: string
+        duration:
+          type: integer
+          description: 媒体时长（毫秒）
+        user_id:
+          type: string
+        message_id:
+          type: string
+        data:
+          type: object
+          additionalProperties: true
+
+    Message:
+      type: object
+      required: [id, platform, conversation_id, user_id, role, segments, timestamp]
+      properties:
+        id:
+          type: string
+        platform:
+          type: string
+        conversation_id:
+          type: string
+        user_id:
+          type: string
+        role:
+          type: string
+          enum: [self, user, system]
+        segments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Segment"
+        timestamp:
+          type: integer
+          description: 毫秒时间戳
+        reply_to:
+          type: string
+        native:
+          type: object
+          additionalProperties: true
+          description: 平台原始载荷（原样保留）
+
+    SendSegmentsRequest:
+      type: object
+      required: [segments]
+      properties:
+        segments:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/Segment"
+        conversation_id:
+          type: string
+        reply_to:
+          type: string
+        user_id:
+          type: string
+
+    Capabilities:
+      type: object
+      properties:
+        send_text:
+          type: boolean
+        send_image:
+          type: boolean
+        send_audio:
+          type: boolean
+        send_video:
+          type: boolean
+        send_file:
+          type: boolean
+        send_mention:
+          type: boolean
+        send_quote:
+          type: boolean
+        max_text_length:
+          type: integer
+          description: 单条文本上限；0 表示不限
+        max_media_bytes:
+          type: integer
+        supports_receipt:
+          type: boolean
+        supports_recall:
+          type: boolean
+        supports_history:
+          type: boolean
+        supports_stream:
+          type: boolean
+
+    ConnectionState:
+      type: string
+      enum: [disconnected, connecting, connected, closing]
+
+    Status:
+      type: object
+      properties:
+        platform:
+          type: string
+        version:
+          type: string
+        connection:
+          type: object
+          properties:
+            state:
+              $ref: "#/components/schemas/ConnectionState"
+            session_expired:
+              type: boolean
+        capabilities:
+          $ref: "#/components/schemas/Capabilities"
+        provider:
+          type: object
+          additionalProperties: true

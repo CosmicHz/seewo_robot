@@ -33,23 +33,38 @@ class MessageDataSource:
         # SortedKeyList 按 m.id 升序维护：插入即有序
         self._messages: SortedKeyList[Message] = _MessageSortedList()
         self._mtime = -1
+        self._size = -1
         self._refresh()
 
     def _refresh(self):
-        """检查文件 mtime，变了就重新加载到缓存"""
+        """检查文件 mtime，变了就重新加载到缓存
+
+        除了 mtime，还比对**文件大小**：某些文件系统（部分网络盘、
+        容器挂载、ext4 的某些配置）mtime 精度不足或被截断，
+        同秒内的两次等长写入会导致 mtime 不变而内容已变 —— 此时
+        用 size 做二次判据可以兜住。
+
+        注意：size 相同且 mtime 相同仍可能漏判（内容改了但长度相同）。
+        这是「感知外部写入」这一机制的固有边界，彻底解决需要文件锁或
+        版本号机制，超出本项目改造范围（见 docs/ARCHITECTURE.md）。
+        """
         try:
-            mtime = os.path.getmtime(funcs.chat_log_file())
+            stat = os.stat(funcs.chat_log_file())
+            mtime, size = stat.st_mtime, stat.st_size
         except OSError:
             self._messages = _MessageSortedList()
             self._mtime = -1
+            self._size = -1
             return
-        if mtime != self._mtime:
+        if mtime != self._mtime or size != self._size:
             self._messages = _MessageSortedList(load_chat_history())
             self._mtime = mtime
+            self._size = size
 
     def _invalidate(self):
         """写操作后使缓存失效，下次 _refresh 重新加载"""
         self._mtime = -1
+        self._size = -1
 
     def _format_msg(
         self, raw: RawMessage, parent_uid, student_uid, student_name
@@ -83,8 +98,12 @@ class MessageDataSource:
             resUrl=raw.resUrl,
         )
 
-    def _persist(self, raw_messages: list[RawMessage]) -> list[Message]:
-        """格式化批量 + merge 落盘 + 失效缓存，返回 formatted list[Message]"""
+    def persist(self, raw_messages: list[RawMessage]) -> list[Message]:
+        """格式化批量 + merge 落盘 + 失效缓存，返回 formatted list[Message]。
+
+        对外公开：这是「把一批上游原始消息写进本地记录」的完整语义，
+        测试与外部调用方不应依赖私有命名。
+        """
         if not raw_messages:
             return []
         parent_uid = self._session.account.uid
@@ -100,6 +119,17 @@ class MessageDataSource:
         return formatted
 
     # —— 对外方法（对应 handler）——
+
+    def local_bounds(self) -> tuple[int, int]:
+        """本地缓存的 (最早 id, 最新 id)。
+
+        供接口层做游标兜底，**避免接口层直接摸 `_messages` 私有属性**
+        （那是跨层调用，会让分层的约束形同虚设）。
+        """
+        self._refresh()
+        if not self._messages:
+            return 0, 0
+        return self._messages[0].id, self._messages[-1].id
 
     def load_local(self, offset=0, limit=50):
         """读本地缓存，分页，补充 senderName（对应 /api/history）
@@ -199,7 +229,7 @@ class MessageDataSource:
                     time.sleep(delay)
 
         all_msgs = [m for m in earlier + latest if m.id not in existing_ids]
-        formatted = self._persist(all_msgs)
+        formatted = self.persist(all_msgs)
         total_count = len(self._messages)
         return {
             "status": "ok",
