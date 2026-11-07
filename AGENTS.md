@@ -220,7 +220,7 @@ API 网关 (api.py)                    ← m-campus 统一接口，pxencode/pxde
 
 ## v2 与协议端点（与 v1 并存）
 
-v1 的 `/api/*` **行为不变**；下表全部是**新增**端点，与 v1 共用同一个 `MessageService` 实例与同一个端口。
+v1 的 `/api/*` **行为不变**；下表全部是**新增**端点。v2 REST 与 OneBot/Satori 共用同一个 `MessageService` 与 `chat_history.v2.json`，但**与 v1 的 `chat_history.json` 相互独立**（v2 不导入 v1 记录）。
 
 | 端点 | 方法 | 说明 |
 | --- | --- | --- |
@@ -581,7 +581,7 @@ def xxx():
 - [yunban.py](yunban.py) 的所有请求**直接 `requests.request`，绕过 `request_manager`**：无统一节流 / 429 退避。批量取出全部班级、逐班取学生、批量签到等高频场景需调用方自行 `time.sleep` 防风控（503/504）。
 - **聊天记录损坏 = 启动即失败（已修，故意不吞异常）**：`funcs.load_chat_history()` 遇到「文件存在但无法解析」会抛 `CorruptChatHistoryError`，让服务启动时立刻崩掉。原因：读容错（返回 `[]`）+ [append_message](funcs.py) 的「读 → 追加 → 全量覆盖」会把损坏当空记录，一次追加就把全部历史覆盖成 1 条新消息（已实测复现）。恢复方式：修复或删除损坏文件后重启，再用 `sync_all` 重新拉取全量。
 - **upload policy 字段位置已按生产实测对齐（已结）**：生产实测（一次只读策略请求，不上传文件）确认 `expireSeconds` 在响应的 `data` 层，`policyList[0]` 含 `uploadUrl/headerFields/priority/type/formFields`。[mock_server.py](mock_server.py) 已按此修正，`tests/test_upload.py::test_mock_server_policy_matches_client_expectations` 已解除 skip
-- **上游错误处理尚未体系化（v1 侧）**：已完成「请求超时（`request_manager.TIMEOUT`）」「状态码语义统一到 `models.SeewoCode` / `SeewoQrCode` + `SendResult` 分存 `seewo_code`/`http_status`」「`-500/-505` 刷新会话后重发一次」「媒体端点不再吞掉发送失败」「`Upload` 策略失败降级」「上传实现合并为 `upload.upload_file` 单一入口」「`login.py` 的 4 处裸 `requests.get` 加 `timeout=15`」「`msg.py` 的 `print` 改为 `logging`」。v2 侧已完整建模为异常体系（`seewo/errors.py`）。v1 侧 DAO 层仍返回结果对象而非抛异常。
+- **上游错误处理尚未体系化（v1 侧）**：已完成「请求超时（`request_manager.TIMEOUT`）」「状态码语义统一到 `models.SeewoCode` / `SeewoQrCode` + `SendResult` 分存 `seewo_code`/`http_status`」「`-500/-505` 刷新会话后重发一次」「媒体端点不再吞掉发送失败」「`Upload` 策略失败降级」「上传实现合并为 `upload.upload_file` 单一入口」「`login.py` 的 4 处裸 `requests.get` 加 `timeout=15`」。（`msg.py` 保留上游的 `print`：路径 A 不配 logging，改 logging 会让终端输出消失。）v2 侧已完整建模为异常体系（`seewo/errors.py`）。v1 侧 DAO 层仍返回结果对象而非抛异常。
 - **ruff BLE001（盲捕 Exception）暂时全局忽略**：约 38 处 `except Exception`（api_server handler / TUI 事件兜底 / main 重连循环）需按调用点逐个收窄，属「上游错误处理体系化」的一部分；完成收窄后删除 [pyproject.toml](pyproject.toml) `[tool.ruff.lint]` 中的 `ignore = ["BLE001"]`
 - **协议端点鉴权复用 `api_key`**：OneBot 11 / Satori 端点复用 `config.api_key` 鉴权（每次请求实时读取，热重载即时生效）：OneBot 用 `Authorization: Bearer` 或 `?access_token=`，Satori HTTP 用 `Authorization: Bearer`，Satori WS 在 IDENTIFY 通过前不推送事件。 `api_key` 为空串时所有端点放行（与 v1 不同），部署时务必设置。
 - **v2 没有后台轮询**：入站消息只在调用 `/api/v2/sync` 或 `GET /api/v2/messages` 时产生；需要持续接收由外部调度器定时调用。

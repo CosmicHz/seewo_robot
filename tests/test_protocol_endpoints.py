@@ -332,3 +332,57 @@ class TestColdStartBinding:
         monkeypatch.setattr(sess, "init", lambda: sess)
         with pytest.raises(ProviderConnectionError):
             api_server._BoundSeewoProvider(sess)._bind()
+
+
+class TestColdStartBindingRealPath:
+    """P0 回归：v2 的 poll/send 首次调用必须自己初始化会话，不能 502。"""
+
+    def _fake_session(self, api_server, monkeypatch, *, expired=False):
+        from types import SimpleNamespace
+
+        from models import MessageResponse
+
+        class StuMsg:
+            def get(self, limit, start=1):
+                return MessageResponse(statusCode=200, result=())
+
+        sess = api_server.Session()
+        calls = []
+
+        def fake_init():
+            calls.append(1)
+            sess.account = SimpleNamespace(uid="parent", token_expired=expired)
+            sess.student = SimpleNamespace(userUid="student")
+            sess.stu_msg = None if expired else StuMsg()
+            return sess
+
+        monkeypatch.setattr(sess, "init", fake_init)
+        return sess, calls
+
+    def test_poll_initialises_session_on_first_use(self, api_server, monkeypatch):
+        sess, calls = self._fake_session(api_server, monkeypatch)
+        provider = api_server._BoundSeewoProvider(sess)
+        result = provider.poll()
+        assert calls == [1]
+        assert result.messages == ()
+
+    def test_send_initialises_session_on_first_use(self, api_server, monkeypatch):
+        from seewo.errors import ProviderError
+        from seewo.models import Segment
+        from seewo.provider.base import OutgoingMessage
+
+        sess, calls = self._fake_session(api_server, monkeypatch)
+        provider = api_server._BoundSeewoProvider(sess)
+        # 假 StuMsg 没有 send()：只有绑定成功后才在平台调用处失败，
+        # 以此证明 send 路径确实触发了会话初始化。
+        with pytest.raises(ProviderError):
+            provider.send(OutgoingMessage(segments=(Segment.text_seg("hi"),)))
+        assert calls == [1]
+
+    def test_expired_token_maps_to_auth_error(self, api_server, monkeypatch):
+        from seewo.errors import ProviderAuthError
+
+        sess, _ = self._fake_session(api_server, monkeypatch, expired=True)
+        provider = api_server._BoundSeewoProvider(sess)
+        with pytest.raises(ProviderAuthError):
+            provider.poll()

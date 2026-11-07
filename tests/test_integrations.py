@@ -879,3 +879,21 @@ class TestOneBotUnknownSegmentRoundtrip:
         assert msg.segments[0].type is SegmentType.UNKNOWN
         encoded = ob._segment_to_onebot(msg.segments[0])
         assert encoded == {"type": "face", "data": {"id": "1"}}
+
+
+class TestUnknownElementFidelity:
+    def test_satori_unknown_element_is_preserved(self):
+        """P2-6：未识别元素不能被静默丢弃。"""
+        parsed = SatoriAdapter.parse_content('hi <face id="1"/> there')
+        kinds = [s.type for s in parsed]
+        assert SegmentType.UNKNOWN in kinds
+        unknown = next(s for s in parsed if s.type is SegmentType.UNKNOWN)
+        assert unknown.data["satoriTag"] == "face"
+        assert '<face id="1"/>' in SatoriAdapter.encode_content(parsed)
+
+    def test_onebot_non_object_segment_is_error(self, service):
+        """P2-6：段数组里的非对象元素应报参数错误，而不是静默跳过。"""
+        ob = OneBot11Adapter(service)
+        result = ob.handle_api("send_private_msg", {"user_id": "u1", "message": [1]})
+        assert result["status"] == "failed"
+        assert result["retcode"] == 1400

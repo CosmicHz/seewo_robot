@@ -191,7 +191,7 @@ statusCode   ──┘
 SeewoProvider.poll()        数字 type → Segment；业务码 → Provider 异常
    │  PollResult(messages, cursor=page)
    ▼
-MessageService.poll_once()  取游标 → provider.poll → ingest → 存游标
+MessageService.poll_once()  取游标 → provider.poll（希沃固定 start=1、cursor=None）→ ingest
    │
    ├─ ingest(): 去重 → 排序 → 落 Store → _dispatch
    │

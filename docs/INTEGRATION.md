@@ -142,7 +142,7 @@ OneBot 11 的 `message` 字段支持**字符串**与**段数组**两种形态，
 | 视频 | `{"type": "video", "data": {"file": "<url>", "name": "..."}}` |
 | 文件 | `{"type": "file", "data": {"file": "<url>", "name": "..."}}` |
 | 提及 | `{"type": "at", "data": {"qq": "<user_id>", "name": "..."}}` |
-| 引用 | `{"type": "reply", "data": {"id": "<message_id>"}}` |
+| 引用 | 解析 `{"type": "reply", "data": {"id": "..."}}`；发送时因平台不支持引用会被能力闸门拒绝 |
 
 出站事件的 `raw_message` 字段同时给出可读形态：文本段给原文，媒体段给 `[CQ:image]` 这样的占位串（**仅供展示，不是可回传的编码** —— 回传请用 `message` 字段）。
 
@@ -159,7 +159,7 @@ OneBot 11 的 `message` 字段支持**字符串**与**段数组**两种形态，
   "sub_type": "friend",
   "message_id": "12",
   "user_id": "student-uid",
-  "message": "我在学校很好",
+  "message": [{"type": "text", "data": {"text": "我在学校很好"}}],
   "raw_message": "我在学校很好",
   "sender": {"user_id": "student-uid", "nickname": "测试学生"}
 }
@@ -320,7 +320,7 @@ def build_payload(self, event: Event) -> Any | None:
 
 ### 4.2 Server
 
-继承 `IntegrationServer` 的服务端基类，注册 HTTP 路由与 WS 端点。参考 `seewo/integrations/onebot11/server.py`。
+`OneBot11Server` / `SatoriServer` 是独立的服务端类（**不继承** `IntegrationServer`）：适配器继承 `IntegrationServer` 负责翻译，服务端类只负责注册 HTTP 路由与 WS 端点。参考 `seewo/integrations/onebot11/server.py`。
 
 ### 4.3 接一个全新平台（不是协议，是消息源）
 

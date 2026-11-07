@@ -305,7 +305,10 @@ class OneBot11Adapter(IntegrationServer):
                 segments.append(Segment.text_seg(item))
                 continue
             if not isinstance(item, dict):
-                continue
+                # 不静默跳过：非法段意味着调用方给错了格式，应明确报错
+                raise TranslationError(
+                    f"消息段必须是对象或字符串，收到 {type(item).__name__}"
+                )
             seg_type = _ONEBOT_TO_SEGMENT.get(
                 item.get("type", "text"), SegmentType.UNKNOWN
             )

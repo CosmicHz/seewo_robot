@@ -533,3 +533,43 @@ class TestSdkContract:
             sdk.status()
         assert exc.value.status_code == 401
         assert exc.value.status == 401
+
+
+class TestStrictBodies:
+    def test_malformed_json_body_is_400(self, client, auth):
+        """P3-4：声明 JSON 但内容非法 → 400，而不是当空 body 执行。"""
+        resp = client.post(
+            "/api/v2/sync",
+            headers={**auth, "Content-Type": "application/json"},
+            data="{not json",
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"]["code"] == "invalid_request"
+
+    def test_empty_segments_are_rejected(self, client, auth, provider):
+        """P3-10：`[{}]` 解析出空文本段，不能当成功发送。"""
+        for segs in ([{}], [{"type": "text", "text": ""}]):
+            resp = client.post(
+                "/api/v2/messages", headers=auth, json={"segments": segs}
+            )
+            assert resp.status_code == 400, segs
+        assert provider.sent == ()
+
+
+class TestHistoryCorruptStore:
+    def test_corrupt_store_returns_json_envelope(self, tmp_path):
+        """P2-4：损坏的 v2 存储 → 统一 JSON 错误信封，不是 HTML 500。"""
+        from seewo.core.store import JsonStore
+
+        path = tmp_path / "chat.v2.json"
+        path.write_text("{broken", encoding="utf-8")
+        svc = MessageService(FakeProvider(), JsonStore(str(path)))
+        flask_app = Flask(__name__)
+        register(flask_app, svc, api_key=TEST_API_KEY)
+        flask_app.config["TESTING"] = True
+        resp = flask_app.test_client().get(
+            "/api/v2/history", headers={"X-API-Key": TEST_API_KEY}
+        )
+        assert resp.status_code == 500
+        assert resp.is_json
+        assert resp.get_json()["status"] == "error"

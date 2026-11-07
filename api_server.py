@@ -176,9 +176,10 @@ class Session:
         并发调用时串行执行（每次都重新初始化），不会交错出半初始化状态。
         """
         with self._lock:
+            # 只标记未初始化，**不要**先清空 student/stu_msg：
+            # 刷新失败时旧快照仍可被并发中的 v1 请求使用（旧行为），
+            # 先清空会让它们拿到 None 而抛 AttributeError → 500。
             self._initialized = False
-            self.student = None
-            self.stu_msg = None
             return self.init()
 
 
@@ -212,14 +213,19 @@ class _BoundSeewoProvider(SeewoProvider):
         self._session = session_obj
 
     def _bind(self):
-        """返回 (account, student, stu_msg)；未就绪时抛错。"""
-        from seewo.errors import ProviderConnectionError
+        """按需加载会话并返回 (account, student, stu_msg)。
+
+        与 v1 `_check_session()` 一致：首次使用时读 tokens.json（`auto_login=False`，
+        不会阻塞扫码）。凭证失效 → `ProviderAuthError`（映射为 401 need_login）；
+        其他未就绪 → `ProviderConnectionError`（502）。
+        """
+        from seewo.errors import ProviderAuthError, ProviderConnectionError
 
         sess = self._session
         if sess.stu_msg is None or sess.account is None:
-            # 与 v1 `_check_session()` 一致：按需加载已缓存的 tokens.json。
-            # `auto_login=False`，凭证无效时不会阻塞扫码，只是保持未就绪。
             sess.init()
+        if sess.account is not None and getattr(sess.account, "token_expired", False):
+            raise ProviderAuthError("希沃凭证已失效，请重新登录")
         if sess.stu_msg is None or sess.account is None:
             raise ProviderConnectionError(
                 "希沃会话尚未初始化，请先完成登录", retryable=False
@@ -227,14 +233,10 @@ class _BoundSeewoProvider(SeewoProvider):
         return sess.account, sess.student, sess.stu_msg
 
     def connect(self) -> None:
-        from seewo.errors import ProviderAuthError
-
         account, student, stu_msg = self._bind()
         self._account = account
         self._student = student
         self._stu_msg = stu_msg
-        if getattr(account, "token_expired", False):
-            raise ProviderAuthError("希沃凭证已失效")
         super().connect()
 
     def refresh_session(self) -> bool:
@@ -248,14 +250,24 @@ class _BoundSeewoProvider(SeewoProvider):
         return True
 
     def poll(self, cursor=None, limit=50):
-        self._sync_binding()
+        self._ensure_bound()
         return super().poll(cursor=cursor, limit=limit)
 
     def _send(self, outgoing):
         # 覆写的是模板方法里的钩子 `_send`（能力闸门已在 `Provider.send()` 中执行），
         # **不要**覆写 `send()` —— 那会绕过闸门。
-        self._sync_binding()
+        self._ensure_bound()
         return super()._send(outgoing)
+
+    def _ensure_bound(self) -> None:
+        """首次调用时按需初始化会话（P0：冷启动 v2 请求不能直接 502）。"""
+        if self._stu_msg is None:
+            account, student, stu_msg = self._bind()
+            self._account = account
+            self._student = student
+            self._stu_msg = stu_msg
+        else:
+            self._sync_binding()
 
     def _sync_binding(self) -> None:
         """会话可能被 refresh() 换掉，每次操作前重新绑定。"""

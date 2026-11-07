@@ -704,3 +704,72 @@ class TestStore:
         store.append([Message(id="m1", platform="f", timestamp=1)])
         store.reload()
         assert len(store.load()) == 1
+
+
+# ============================ 第一轮 review 回归 ============================
+
+
+class TestStoreFailureDoesNotLoseMessages:
+    def test_redelivery_after_store_failure_is_accepted(self, provider):
+        """P1-1：落库失败时不能把 id 留在去重 LRU，否则重投会被永久丢弃。"""
+
+        class FlakyStore(MemoryStore):
+            def __init__(self):
+                super().__init__()
+                self.fail = True
+
+            def append(self, messages):
+                if self.fail:
+                    self.fail = False
+                    raise RuntimeError("disk full")
+                return super().append(messages)
+
+        store = FlakyStore()
+        svc = MessageService(provider, store)
+        svc.connect()
+        msg = Message(id="m1", platform="fake", segments=(Segment.text_seg("hi"),))
+        with pytest.raises(RuntimeError):
+            svc.ingest([msg])
+        assert svc.ingest([msg]) == (msg,)
+        assert [m.id for m in store.load()] == ["m1"]
+
+
+class TestErrorHandlerRecursion:
+    def test_always_failing_on_any_handler_does_not_recurse(self, provider):
+        """P1-2：on_any 处理器恒抛异常时不应递归派发 ERROR。"""
+        svc = MessageService(provider, MemoryStore())
+        svc.connect()
+        calls = []
+
+        def bad(event):
+            calls.append(event.type)
+            raise RuntimeError("boom")
+
+        svc.on_any(bad)
+        svc.ingest(
+            [Message(id="m1", platform="fake", segments=(Segment.text_seg("x"),))]
+        )
+        # 一次 MESSAGE + 一次 ERROR 后停止，不发生递归
+        assert calls.count(EventType.MESSAGE) == 1
+        assert len(calls) <= 4
+
+
+class TestSessionExpiredFlag:
+    def test_flag_clears_after_successful_refresh_before_retry_failure(
+        self, service, provider
+    ):
+        """P3-3：刷新成功即复位 session_expired，即使重试因业务错误失败。"""
+        state = {"n": 0}
+        original = provider._send
+
+        def flaky(outgoing):
+            state["n"] += 1
+            if state["n"] == 1:
+                raise ProviderAuthError("失效")
+            raise ProviderBusinessError("被拒")
+
+        provider._send = flaky
+        with pytest.raises(ProviderBusinessError):
+            service.send([Segment.text_seg("x")])
+        assert service.session_expired is False
+        provider._send = original

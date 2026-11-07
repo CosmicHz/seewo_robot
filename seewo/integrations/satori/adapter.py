@@ -38,8 +38,6 @@ from typing import Any
 from ...core.service import MessageService
 from ...errors import CapabilityError, ProviderAuthError, ProviderError
 from ...models import (
-    Conversation,
-    ConversationType,
     Event,
     EventType,
     Message,
@@ -216,9 +214,10 @@ class SatoriAdapter(IntegrationServer):
         }
 
     def _channel_block(self, message: Message) -> dict[str, Any]:
+        # Satori ChannelType：TEXT=0 / DIRECT=1 / CATEGORY=2 / VOICE=3
         return {
             "id": message.conversation_id or "seewo-direct",
-            "type": ConversationType.DIRECT.value,
+            "type": 1,
         }
 
     # ------------------------------------------------------------------
@@ -232,6 +231,18 @@ class SatoriAdapter(IntegrationServer):
         for seg in segments:
             if seg.type is SegmentType.TEXT:
                 parts.append(html.escape(seg.text, quote=False))
+                continue
+            if seg.type is SegmentType.UNKNOWN:
+                tag = str(seg.data.get("satoriTag") or "")
+                if tag:
+                    attrs_text = " ".join(
+                        f'{k}="{html.escape(str(v), quote=True)}"'
+                        for k, v in seg.data.items()
+                        if k != "satoriTag"
+                    )
+                    parts.append(
+                        f"<{tag} {attrs_text}/>" if attrs_text else f"<{tag}/>"
+                    )
                 continue
             tag = _SEGMENT_TO_ELEMENT.get(seg.type)
             if tag is None:
@@ -297,6 +308,14 @@ class SatoriAdapter(IntegrationServer):
                         url=attrs.get("src", ""),
                         name=attrs.get("title", ""),
                         duration=int(attrs.get("duration", 0) or 0),
+                    )
+                )
+            else:
+                # 未识别元素：保留原标签与属性，交给能力闸门拒绝，不静默丢弃
+                segments.append(
+                    Segment(
+                        type=SegmentType.UNKNOWN,
+                        data={"satoriTag": tag, **attrs},
                     )
                 )
             cursor = match.end()
@@ -506,10 +525,8 @@ class SatoriAdapter(IntegrationServer):
 
     def _api_channel_get(self, params: dict[str, Any]) -> Any:
         channel_id = str(params.get("channel_id", ""))
-        return Conversation(
-            id=channel_id or "seewo-direct",
-            type=ConversationType.DIRECT,
-        ).to_dict()
+        # Satori Channel：{id, type, name?}，type 为 ChannelType 整数
+        return {"id": channel_id or "seewo-direct", "type": 1}
 
     def _api_user_get(self, params: dict[str, Any]) -> Any:
         user_id = str(params.get("user_id", ""))

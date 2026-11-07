@@ -494,3 +494,36 @@ class TestFakeProviderHistory:
         p = FakeProvider()
         p.emit_text("a", message_id="m1")
         assert p.history(before="nope") == ()
+
+
+class TestReplyToCapabilityGate:
+    def test_reply_to_rejected_when_platform_lacks_quote(self):
+        """P1-3：reply_to 也必须过能力闸门，不能静默发成普通文本。"""
+        provider, stu_msg = _seewo_provider()
+        provider.connect()
+        with pytest.raises(CapabilityError) as exc:
+            provider.send(
+                OutgoingMessage(segments=(Segment.text_seg("hi"),), reply_to="m1")
+            )
+        assert exc.value.capability == "send_quote"
+        assert stu_msg.sent == []
+
+    def test_reply_to_allowed_when_capability_declared(self):
+        provider = FakeProvider()
+        provider.connect()
+        sent = provider.send(
+            OutgoingMessage(segments=(Segment.text_seg("hi"),), reply_to="m1")
+        )
+        assert sent is not None
+
+
+class TestSeewoTimeoutTranslation:
+    def test_requests_timeout_maps_to_provider_timeout(self):
+        """P2-3：超时要映射成 ProviderTimeoutError，REST 才能给出 504。"""
+        import requests
+
+        from seewo.errors import ProviderTimeoutError
+
+        exc = SeewoProvider._translate(requests.Timeout("slow"))
+        assert isinstance(exc, ProviderTimeoutError)
+        assert exc.retryable is True

@@ -112,8 +112,14 @@ class SatoriServer:
             identified = False
             try:
                 while True:
-                    raw = ws.receive()
+                    # 文档承诺 IDENTIFY 必须在 10 秒内完成：未认证前带超时等待，
+                    # 超时（返回 None）即关闭，避免未认证连接长期占用线程。
+                    raw = ws.receive(timeout=None if identified else 10.0)
                     if raw is None:
+                        if not identified:
+                            logger.warning(
+                                "Satori WS 未在超时内完成 IDENTIFY，关闭连接"
+                            )
                         break
                     try:
                         result = adapter.process_signal(raw)
@@ -135,12 +141,16 @@ class SatoriServer:
                 adapter._safe_close(ws)
 
     def start_ws(self, app: Any, host: str, port: int) -> None:
-        """用 flask-sock 启动 WS 服务（阻塞）。"""
-        from flask_sock import SockServer
+        """挂载 WS 端点并用 Flask 开发服务器运行（阻塞）。
 
-        self._sock_server = SockServer(app)
+        flask-sock 只在 `Sock(app)` 上注册路由，没有独立的 `SockServer`；
+        `api_server.py` 走的是同一条路径（HTTP 与 WS 共用端口）。
+        """
+        from flask_sock import Sock
+
+        self._sock_server = Sock(app)
         self.attach_websocket(self._sock_server)
-        self._sock_server.run(host=host, port=port)
+        app.run(host=host, port=port)
 
     def stop(self) -> None:
         """停止服务。"""

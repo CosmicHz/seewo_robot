@@ -142,7 +142,7 @@ assert ds.load_local()["messages"] == []
 | 文件 | 审查结论 |
 | --- | --- |
 | `test_models_v2.py` | ✅ 断言的是模型公开语义（`to_dict`/`from_dict` 往返、能力表、跃迁表）。**注意**：`test_segment_is_frozen` 断言 `dataclasses.FrozenInstanceError` —— 冻结是**明确的设计决策**（模型不可变），有依据 |
-| `test_core_service.py` | ✅ 全部通过公开方法（`ingest`/`poll_once`/`send`/`history`/`on_any`）观察行为。反例（能力缺口、认证失效）也都有 |
+| `test_core_service.py` | 绝大多数通过公开方法（`ingest`/`poll_once`/`send`/`history`/`on_any`）观察行为；少量既有用例仍触碰 `_seen` 等私有成员，属待整改项。反例（能力缺口、认证失效）都有 |
 | `test_integrations.py` | ✅ 断言的是 **OneBot 11 / Satori 协议规范**（字段名、retcode、opcode、元素语法），这些是**外部公开标准**，不是本项目实现 |
 | `test_rest_v2.py` | ✅ 断言 HTTP 契约（状态码、响应信封）+ SDK 与 REST 的一致性 |
 | `test_provider_contract.py` | ✅ **同一套断言跑在 `FakeProvider` 与 `SeewoProvider` 上** —— 断言的是 Provider **契约**，不是任一实现的细节。这是本次改造最值得保留的设计 |

@@ -442,7 +442,7 @@ Invoke-WebRequest -Uri "http://localhost:9000/mock/add_message" `
 
 ## 🆕 REST API v2（通用消息服务）
 
-v2 与 v1 **并存**，共用同一份数据。v2 采用统一响应信封与统一错误码，接口描述见 [`seewo/interfaces/openapi.yaml`](seewo/interfaces/openapi.yaml)。
+v2 与 v1 **并存**，但**存储相互独立**：v1 读写 `chat_history.json`，v2 读写 `chat_history.v2.json`（v2 不导入 v1 历史）。v2 REST 与 OneBot/Satori 适配器共享同一个 `MessageService`。v2 采用统一响应信封与统一错误码，接口描述见 [`seewo/interfaces/openapi.yaml`](seewo/interfaces/openapi.yaml)。
 
 ### 端点一览
 
@@ -507,7 +507,7 @@ with SeewoRobotClient(base_url="http://localhost:5001", api_key="xxx") as c:
     print(c.capabilities())
 
     c.send_text("你好")
-    c.send([Segment.text_seg("你好"), Segment.image("https://.../a.png")])
+    # 媒体发送当前不可用（能力表 send_image/send_audio=false），请走 v1 端点
 ```
 
 > v2 SDK 不做本地文件上传。**当前希沃 Provider 在 v2 下不支持媒体发送**（能力表 `send_image/send_audio=false`，调用返回 `501 capability`），发图片/音频请用 v1 的 `/api/send_image` / `/api/send_audio`。

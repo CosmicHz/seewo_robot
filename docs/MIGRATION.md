@@ -58,7 +58,7 @@
 /satori/v1/*    Satori 协议端点（新增）
 ```
 
-两个版本**共用同一个 `MessageService` 实例**，因此数据完全一致：v1 收到的消息，v2 能查到；反之亦然。
+两个版本**并存但存储独立**：v1 用 `chat_history.json`，v2 用 `chat_history.v2.json`，v2 不导入 v1 记录；v2 REST 与 OneBot/Satori 之间共享同一个 `MessageService`。
 
 ---
 
@@ -73,7 +73,7 @@
 | 发图片 | `POST /api/send_image` | `POST /api/v2/messages`（`segments` 里放 image 段） | v1 收 `file_path` / multipart；v2 收 URL |
 | 发音频 | `POST /api/send_audio` | `POST /api/v2/messages`（`segments` 里放 audio 段） | 同上 |
 | 读历史 | `GET /api/history?limit&offset` | `GET /api/v2/history?limit&offset` | v2 额外返回 `total` |
-| 全量同步 | `POST /api/sync_all` | `POST /api/v2/sync` | v1 支持 `batch_size`/`delay` 防风控；v2 只触发一次拉取 |
+| 全量同步 | `POST /api/sync_all` | `POST /api/v2/sync` | v1 支持 `batch_size`/`delay` 防风控并写 v1 文件；v2 只拉**最新一页**写 v2 文件，不提供历史补拉 |
 | 刷新会话 | `POST /api/refresh` | `POST /api/v2/connection` `{"action":"..."}` | v2 还可 `connect`/`disconnect` |
 | 事件推送 | — | `GET /api/v2/events`（SSE） | **v2 新增** |
 
@@ -186,8 +186,8 @@ v2 用统一错误码，HTTP 状态码一一对应：
 | `invalid_request` | 400 | 参数非法 | 缺 `segments` / 越界的 `limit` |
 | `unauthorized` | 401 | API Key 不对 | `X-API-Key` 缺失或不匹配 |
 | `need_login` | 401 | 需要重新扫码 | 凭证过期且刷新失败 |
-| `not_found` | 404 | 资源不存在 | 按 id 查消息 |
-| `conflict` | 409 | 状态冲突 | 重复消息 / 状态机非法跃迁 |
+| `not_found` | 404 | 资源不存在（预留，当前无端点返回） | 按 id 查消息 |
+| `conflict` | 409 | 状态冲突（预留，当前无端点返回） | 重复消息 / 状态机非法跃迁 |
 | `capability` | **501** | 平台不具备该能力 | 发图片但未配上传器；发希沃不支持的段 |
 | `upstream` | **502** | 上游平台失败 | 希沃返回业务错误 |
 | `timeout` | **504** | 上游超时 | 请求超时 |

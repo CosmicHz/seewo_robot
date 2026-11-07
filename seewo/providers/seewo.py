@@ -27,6 +27,7 @@ from ..errors import (
     ProviderBusinessError,
     ProviderConnectionError,
     ProviderError,
+    ProviderTimeoutError,
 )
 from ..models import (
     Conversation,
@@ -123,7 +124,9 @@ class SeewoProvider(Provider):
             from msg import msg as msg_dao
             from stu import stu as stu_dao
 
-            account = acc(type=1)
+            # 非交互：只重读 tokens.json，绝不触发扫码（否则会阻塞请求线程）。
+            # 缓存凭证已失效时返回 False，由上层抛 SessionExpiredError 引导重新登录。
+            account = acc(type=0, auto_login=False)
             if getattr(account, "token_expired", False):
                 return False
             student = stu_dao(account)
@@ -150,7 +153,7 @@ class SeewoProvider(Provider):
         因此本 Provider **不提供游标**（返回 `cursor=None`，入参被忽略）。
 
         已知边界：两次 poll 之间新到的留言多于 `limit` 条时，超出部分本次
-        拉不到（历史补拉请用 v1 的 `/api/sync_all`）。
+        拉不到；v2 不提供历史补拉（v1 的 `/api/sync_all` 只写 v1 文件）。
         """
         del cursor  # 见 docstring：希沃无增量游标
         if self._stu_msg is None:
@@ -360,7 +363,7 @@ class SeewoProvider(Provider):
         import requests
 
         if isinstance(exc, requests.Timeout):
-            return ProviderConnectionError(f"希沃请求超时: {exc}", retryable=True)
+            return ProviderTimeoutError(f"希沃请求超时: {exc}", retryable=True)
         if isinstance(exc, requests.ConnectionError):
             return ProviderConnectionError(f"希沃连接失败: {exc}", retryable=True)
         if isinstance(exc, requests.RequestException):

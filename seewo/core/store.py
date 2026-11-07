@@ -34,7 +34,8 @@ class Store(abc.ABC):
     def append(self, messages: Iterable[Message]) -> int:
         """追加消息，返回实际写入条数。
 
-        实现必须保证：**按 `sort_key` 有序且不重复**（同 id 覆盖而非追加）。
+        实现必须保证：**按 `sort_key` 有序且不重复**（同 id 保留先到的，
+        后续同 id 视为幂等重放并忽略）。
         """
 
     @abc.abstractmethod
@@ -152,7 +153,12 @@ class JsonStore(Store):
                     f"疑似 v1 的 chat_history.json）；为避免覆盖 v1 数据拒绝加载: "
                     f"{self.path}"
                 )
-            msg = Message.from_dict(item)
+            try:
+                msg = Message.from_dict(item)
+            except (KeyError, TypeError, ValueError) as e:
+                raise CorruptStoreError(
+                    f"消息记录无法解析，请修复或删除后重建: {self.path} → {e}"
+                ) from e
             loaded[msg.id] = msg
         self._messages = loaded
         self._loaded = True

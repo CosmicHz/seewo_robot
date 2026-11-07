@@ -314,11 +314,18 @@ class ApiV2:
             )
         except ValueError as e:
             return _invalid(e)
-        messages = self.service.history(limit=limit, offset=offset)
+        try:
+            messages = self.service.history(limit=limit, offset=offset)
+            total = len(self.service.store)
+        except SeewoError as e:
+            return error_response(map_exception(e))
+        except Exception as e:
+            logger.exception("/api/v2/history 异常")
+            return error_response(map_exception(e))
         return ok_response(
             {
                 "count": len(messages),
-                "total": len(self.service.store),
+                "total": total,
                 "messages": [m.to_dict() for m in messages],
             }
         )
@@ -515,13 +522,34 @@ def _int_arg(
 
 
 def _json_object(request: Any) -> dict[str, Any]:
-    """取请求体 JSON 对象。缺省请求体视为 ``{}``；非对象（数组/标量）抛 `ValueError`。"""
+    """取请求体 JSON 对象。
+
+    - 无请求体 → ``{}``（`/sync` 允许空 body）
+    - 有请求体但不是合法 JSON / 不是对象 → `InvalidRequest`（400）
+    """
     data = request.get_json(silent=True)
     if data is None:
+        if request.get_data(cache=True):
+            raise InvalidRequest("请求体不是合法 JSON")
         return {}
     if not isinstance(data, dict):
         raise InvalidRequest("请求体必须是 JSON 对象")
     return data
+
+
+def _segment_has_content(seg: Segment) -> bool:
+    """判断段是否有实际内容（空文本 / 空资源段不算）。"""
+    from ..models import SegmentType as _ST
+
+    if seg.type is _ST.TEXT:
+        return bool(seg.text.strip())
+    if seg.type is _ST.AT:
+        return bool(seg.user_id)
+    if seg.type is _ST.QUOTE:
+        return bool(seg.message_id)
+    if seg.type is _ST.UNKNOWN:
+        return bool(seg.data)
+    return bool(seg.url)
 
 
 def _parse_segments(data: dict[str, Any]) -> tuple[Segment, ...]:
@@ -539,7 +567,10 @@ def _parse_segments(data: dict[str, Any]) -> tuple[Segment, ...]:
         for i, s in enumerate(raw_segments):
             if not isinstance(s, dict):
                 raise InvalidRequest(f"segments[{i}] 必须是对象")
-        return tuple(Segment.from_dict(s) for s in raw_segments)
+        parsed = tuple(Segment.from_dict(s) for s in raw_segments)
+        if not any(_segment_has_content(s) for s in parsed):
+            raise InvalidRequest("segments 不含任何可发送内容")
+        return parsed
     content = data.get("content")
     if isinstance(content, str) and content:
         return (Segment.text_seg(content),)

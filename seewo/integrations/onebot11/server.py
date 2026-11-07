@@ -157,12 +157,16 @@ class OneBot11Server:
                 adapter.unregister_connection(ws)
 
     def start_ws(self, app: Any, host: str, port: int) -> None:
-        """用 flask-sock 启动 WS 服务（阻塞）。"""
-        from flask_sock import SockServer
+        """挂载 WS 端点并用 Flask 开发服务器运行（阻塞）。
 
-        self._sock_server = SockServer(app)
+        flask-sock 只在 `Sock(app)` 上注册路由，没有独立的 `SockServer`；
+        `api_server.py` 走的是同一条路径（HTTP 与 WS 共用端口）。
+        """
+        from flask_sock import Sock
+
+        self._sock_server = Sock(app)
         self.attach_websocket(self._sock_server)
-        self._sock_server.run(host=host, port=port)
+        app.run(host=host, port=port)
 
     def stop(self) -> None:
         """停止服务。"""

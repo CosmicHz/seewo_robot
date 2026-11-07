@@ -113,8 +113,13 @@ class IntegrationServer:
         self.service.on_any(self._on_core_event)
         self._subscribed = True
 
-    def stop(self) -> None:
-        """停止服务，释放资源。"""
+    def stop(self, *, disconnect_core: bool = True) -> None:
+        """停止服务，释放资源。
+
+        Args:
+            disconnect_core: 是否同时断开核心服务。多个适配器共用一个
+                `MessageService` 时传 ``False``，把连接生命周期交还宿主。
+        """
         self._stop.set()
         for thread in self._threads:
             if thread.is_alive():
@@ -128,10 +133,11 @@ class IntegrationServer:
         if self._subscribed:
             self.service.off_any(self._on_core_event)
             self._subscribed = False
-        try:
-            self.service.disconnect()
-        except Exception as e:
-            logger.warning("断开核心连接时出错: %s", e)
+        if disconnect_core:
+            try:
+                self.service.disconnect()
+            except Exception as e:
+                logger.warning("断开核心连接时出错: %s", e)
 
     def __enter__(self) -> Self:
         self.start()

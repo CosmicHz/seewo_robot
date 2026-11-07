@@ -52,6 +52,7 @@
 | `supports_recall` | `false` | 协议层有 `DELETE_KIDNOTE_V1_NOTE`，但**本项目未开放**该能力 |
 | `supports_history` | `false` | `Provider.history()`（平台侧回溯）未实现，如实申报。本地历史由核心层 Store 提供（`/api/v2/history`），不经 Provider |
 | `supports_stream` | `false` | 希沃是**轮询式**，无推送通道 |
+| 语音转文字（ASR） | 未提供 | 项目只把语音作为媒体（`SegmentType.AUDIO` + URL）传递，没有任何识别实现；见 §3.7 |
 
 > `send_image` / `send_audio` 是**条件能力**：注入 `uploader` 后变为 `true`。这是有意的 —— 能力申报反映「当前这个 Provider 实例**实际**能做什么」，而不是「协议理论上支持什么」。
 >
@@ -87,7 +88,7 @@
 
 - **缺口**：希沃无推送通道，只能轮询。
 - **当前行为**：`supports_stream = false`。事件对外有两条路：轮询 `GET /api/v2/messages`，或订阅 SSE `GET /api/v2/events` —— 但 SSE 的数据源仍是**轮询**出来的，不是上游推送。
-- **影响**：事件延迟 = 轮询间隔（`config.json` 的 `base_interval`，默认 1 秒）。
+- **影响**：v2 没有后台轮询，事件延迟取决于外部调用 `/api/v2/sync` 或 `GET /api/v2/messages` 的频率；`base_interval` 只用于 v1 / 路径 A。
 
 ### 3.5 多会话 / 多学生 / 多家长
 
@@ -122,3 +123,10 @@
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) —— 分层与依赖方向
 - [`INTEGRATION.md`](INTEGRATION.md) —— 框架接入实操
 - [`../tests/test_provider_contract.py`](../tests/test_provider_contract.py) —— Provider 契约测试
+
+### 3.7 语音转文字（ASR）
+
+- **缺口**：入站语音（希沃 `type=3`）只被当作媒体段（`SegmentType.AUDIO` + `url` + `duration`）传递；项目没有 ASR 依赖或实现，全仓库检索 `asr` / `speech-to-text` / `transcript` / `whisper` / `语音识别` 均无结果。
+- **影响**：基于文本的自动回复、命令处理与消息检索无法消费语音留言。
+- **建议的补齐方式**（尚未实现，需维护者决策）：新增默认关闭的配置（如 `asr.enabled` / `asr.provider` / `asr.language`）；对入站音频段在 `Segment.data["transcript"]` 附带识别文本而**不伪造文本段**；识别失败只记日志、原音频段照常投递。若接入外部识别服务，应封装在 Provider 或独立适配层，不进入 `seewo/core`。
+- **不猜测**：希沃协议本身是否已返回转写结果**未经证实**，不做假设。

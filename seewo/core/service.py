@@ -164,6 +164,10 @@ class MessageService:
                     handler(event)
                 except Exception as e:
                     logger.exception("事件处理器抛异常: %s", handler)
+                    if event.type is EventType.ERROR:
+                        # ERROR 事件自身处理失败时不再派发 ERROR：
+                        # 否则一个恒抛异常的 on_any 处理器会递归到 RecursionError
+                        continue
                     self._emit_error(
                         f"事件处理器异常: {e}", data={"event_type": event.type.value}
                     )
@@ -253,21 +257,26 @@ class MessageService:
 
     def _ingest_locked(self, messages: Iterable[Message]) -> tuple[Message, ...]:
         accepted: list[Message] = []
+        batch_ids: set[str] = set()
         for message in messages:
             if not message.id:
                 logger.warning("丢弃无 id 的消息: %r", message)
                 continue
-            if self._is_duplicate(message):
+            if message.id in batch_ids or self._is_duplicate(message):
                 logger.debug("消息重复，跳过: id=%s", message.id)
                 continue
-            self._remember(message.id)
+            batch_ids.add(message.id)
             accepted.append(message)
 
         if not accepted:
             return ()
 
         accepted.sort(key=lambda m: m.sort_key)
+        # 先落库、成功后再记入去重 LRU：落库失败时 id 不能留在 `_seen`，
+        # 否则上游重投会被当成重复而永久丢失（Store 是 at-least-once 的兜底）。
         self._store.append(accepted)
+        for message in accepted:
+            self._remember(message.id)
 
         for message in accepted:
             self._dispatch(
@@ -319,6 +328,8 @@ class MessageService:
             if not self._refresh_session():
                 self._emit_error(f"会话已失效: {e}", data={"auth_expired": True})
                 raise SessionExpiredError(str(e)) from e
+            # 刷新成功即恢复；若重试仍认证失效，下面会重新置 True
+            self._session_expired = False
         try:
             result = self._provider.poll(cursor=cursor, limit=limit)
         except ProviderAuthError as e2:
@@ -398,6 +409,7 @@ class MessageService:
             if not self._refresh_session():
                 self._emit_error(f"会话已失效: {e}", data={"auth_expired": True})
                 raise SessionExpiredError(str(e)) from e
+            self._session_expired = False
             try:
                 message = self._provider.send(outgoing)
             except ProviderAuthError as e2:

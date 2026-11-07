@@ -158,6 +158,11 @@ class Provider(abc.ABC):
             ProviderConnectionError: 连接失败
         """
         self.ensure_can_send(outgoing.segments)
+        if outgoing.reply_to and not self.capabilities.send_quote:
+            raise CapabilityError(
+                "send_quote",
+                f"平台 {self.platform} 不支持引用消息（reply_to）",
+            )
         text = "".join(s.text for s in outgoing.segments if s.type is SegmentType.TEXT)
         if text:
             self.ensure_text_length(text)
